@@ -2,12 +2,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import LibraryTable from "./components/LibraryTable";
 import NowPlayingBar from "./components/NowPlayingBar";
-import SourceSelector from "./components/SourceSelector";
+import ReceiverPanel from "./components/ReceiverPanel";
+import SourceSelector, { type SelectableSource } from "./components/SourceSelector";
 import * as ipc from "./lib/ipc";
 import type {
   AudioDevice,
+  EngineStatus,
+  LineInSource,
   NowPlaying,
   PlaybackState,
+  RecordingState,
   SortSpec,
   Track,
 } from "./lib/types";
@@ -25,6 +29,12 @@ export default function App() {
   const [volume, setVolume] = useState(1);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [source, setSource] = useState<SelectableSource>("library");
+  const [engineStat, setEngineStat] = useState<EngineStatus | null>(null);
+  const [recState, setRecState] = useState<RecordingState>({
+    recording: false,
+    recordedMs: 0,
+  });
 
   const showStatus = useCallback((msg: string) => {
     setStatus(msg);
@@ -57,11 +67,29 @@ export default function App() {
     const subs = [
       ipc.onPosition(setPositionMs),
       ipc.onPlaybackState(setPlayState),
+      ipc.onRecordingState(setRecState),
     ];
     return () => {
       subs.forEach((p) => p.then((un) => un()));
     };
   }, [showStatus]);
+
+  const handleSelectSource = async (next: SelectableSource) => {
+    try {
+      if (next === "library") {
+        await ipc.stop();
+        setEngineStat(null);
+        setSource("library");
+        return;
+      }
+      const stat = await ipc.startLineIn(next as LineInSource);
+      setNow(null);
+      setEngineStat(stat);
+      setSource(next);
+    } catch (e) {
+      showStatus(`${e}`);
+    }
+  };
 
   const handleImport = async () => {
     const folder = await open({
@@ -88,6 +116,8 @@ export default function App() {
       await ipc.loadTrack(track.id);
       await ipc.play();
       setNow(await ipc.nowPlaying());
+      setEngineStat(null);
+      setSource("library");
       setPositionMs(0);
     } catch (e) {
       showStatus(`${e}`);
@@ -110,11 +140,25 @@ export default function App() {
     ipc.setVolume(level).catch((e) => showStatus(`${e}`));
   };
 
+  const lineIn = source !== "library" ? (source as LineInSource) : null;
+
+  const handleStop = async () => {
+    try {
+      await ipc.stop();
+      if (lineIn) {
+        setEngineStat(null);
+        setSource("library");
+      }
+    } catch (e) {
+      showStatus(`${e}`);
+    }
+  };
+
   return (
     <div className="app">
       <header className="app-header">
         <div className="brand">STACK</div>
-        <SourceSelector />
+        <SourceSelector active={source} onSelect={handleSelectSource} />
         <div className="header-controls">
           <select
             className="device-picker"
@@ -138,24 +182,43 @@ export default function App() {
 
       {status && <div className="status-banner">{status}</div>}
 
-      <LibraryTable
-        tracks={tracks}
-        query={query}
-        onQueryChange={setQuery}
-        sort={sort}
-        onSortChange={setSort}
-        onActivate={handleActivate}
-        nowPlayingId={playState === "stopped" ? null : (now?.track.id ?? null)}
-      />
+      {lineIn ? (
+        <ReceiverPanel
+          source={lineIn}
+          status={engineStat}
+          recording={recState}
+          onStatus={setEngineStat}
+          onError={showStatus}
+          onRecordingSaved={(title) => {
+            showStatus(`Saved “${title}” to the library`);
+            refreshTracks();
+          }}
+        />
+      ) : (
+        <LibraryTable
+          tracks={tracks}
+          query={query}
+          onQueryChange={setQuery}
+          sort={sort}
+          onSortChange={setSort}
+          onActivate={handleActivate}
+          nowPlayingId={playState === "stopped" ? null : (now?.track.id ?? null)}
+        />
+      )}
 
       <NowPlayingBar
-        track={now?.track ?? null}
+        track={lineIn ? null : (now?.track ?? null)}
+        lineInLabel={
+          lineIn
+            ? `Line In — ${lineIn.charAt(0).toUpperCase()}${lineIn.slice(1)}`
+            : null
+        }
         state={playState}
         positionMs={positionMs}
         volume={volume}
         onPlay={() => ipc.play().catch((e) => showStatus(`${e}`))}
         onPause={() => ipc.pause().catch((e) => showStatus(`${e}`))}
-        onStop={() => ipc.stop().catch((e) => showStatus(`${e}`))}
+        onStop={handleStop}
         onSeek={(ms) => ipc.seek(ms).catch((e) => showStatus(`${e}`))}
         onVolume={handleVolume}
       />

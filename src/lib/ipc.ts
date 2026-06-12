@@ -5,9 +5,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AudioDevice,
+  EngineStatus,
   ImportResult,
+  LineInSource,
   NowPlaying,
   PlaybackState,
+  RecordingState,
   SortSpec,
   Track,
   VuLevels,
@@ -67,7 +70,56 @@ export function nowPlaying(): Promise<NowPlaying | null> {
   return invoke<NowPlaying | null>("now_playing");
 }
 
+// --- receiver: line-in sources, DSP, recording ---------------------------
+
+export function getAudioInputDevices(): Promise<AudioDevice[]> {
+  return invoke<AudioDevice[]>("get_audio_input_devices");
+}
+
+export function startLineIn(
+  source: LineInSource,
+  inputDevice?: string,
+): Promise<EngineStatus> {
+  return invoke<EngineStatus>("start_line_in", {
+    source,
+    inputDevice: inputDevice ?? null,
+  });
+}
+
+export function setInputDevice(
+  source: LineInSource,
+  deviceId: string,
+): Promise<EngineStatus> {
+  return invoke<EngineStatus>("set_input_device", { source, deviceId });
+}
+
+export function setRiaa(on: boolean): Promise<EngineStatus> {
+  return invoke<EngineStatus>("set_riaa", { on });
+}
+
+export function setTone(bassDb: number, trebleDb: number): Promise<EngineStatus> {
+  return invoke<EngineStatus>("set_tone", { bassDb, trebleDb });
+}
+
+export function engineStatus(): Promise<EngineStatus> {
+  return invoke<EngineStatus>("engine_status");
+}
+
+export function startRecording(): Promise<string> {
+  return invoke<string>("start_recording");
+}
+
+export function stopRecording(): Promise<Track> {
+  return invoke<Track>("stop_recording");
+}
+
 // --- engine events -------------------------------------------------------
+
+export function onRecordingState(
+  cb: (state: RecordingState) => void,
+): Promise<UnlistenFn> {
+  return listen<RecordingState>("recording-state", (e) => cb(e.payload));
+}
 
 export function onVuLevels(cb: (levels: VuLevels) => void): Promise<UnlistenFn> {
   return listen<VuLevels>("vu-levels", (e) => cb(e.payload));

@@ -52,6 +52,27 @@ export interface VuLevels {
   rmsR: number;
 }
 
+export type LineInSource = "phono" | "tape" | "cd" | "aux";
+
+export interface EngineStatus {
+  mode: "library" | "lineIn";
+  source: string | null;
+  inputDevice: string | null;
+  riaa: boolean;
+  bassDb: number;
+  trebleDb: number;
+  recording: boolean;
+  recordedMs: number;
+  state: PlaybackState;
+  positionMs: number;
+  volume: number;
+}
+
+export interface RecordingState {
+  recording: boolean;
+  recordedMs: number;
+}
+
 export type SortField =
   | "title"
   | "artist"

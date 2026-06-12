@@ -6,6 +6,7 @@ import type { PlaybackState, Track } from "../lib/types";
 
 interface Props {
   track: Track | null;
+  lineInLabel?: string | null;
   state: PlaybackState;
   positionMs: number;
   volume: number;
@@ -17,8 +18,18 @@ interface Props {
 }
 
 export default function NowPlayingBar(props: Props) {
-  const { track, state, positionMs, volume, onPlay, onPause, onStop, onSeek, onVolume } =
-    props;
+  const {
+    track,
+    lineInLabel,
+    state,
+    positionMs,
+    volume,
+    onPlay,
+    onPause,
+    onStop,
+    onSeek,
+    onVolume,
+  } = props;
   const durationMs = track?.durationMs ?? 0;
 
   // While dragging, show the drag position instead of fighting engine events.
@@ -29,7 +40,14 @@ export default function NowPlayingBar(props: Props) {
   return (
     <footer className="now-playing-bar">
       <div className="np-track">
-        {track ? (
+        {lineInLabel ? (
+          <>
+            <div className="np-title">{lineInLabel}</div>
+            <div className="np-artist">
+              {state === "playing" ? "monitoring" : "muted"}
+            </div>
+          </>
+        ) : track ? (
           <>
             <div className="np-title">{track.title ?? "Untitled"}</div>
             <div className="np-artist">{track.artist ?? "Unknown artist"}</div>
@@ -41,7 +59,7 @@ export default function NowPlayingBar(props: Props) {
 
       <TransportControls
         state={state}
-        canPlay={track != null}
+        canPlay={track != null || lineInLabel != null}
         onPlay={onPlay}
         onPause={onPause}
         onStop={onStop}

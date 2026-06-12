@@ -1,30 +1,41 @@
+export type SelectableSource = "library" | "phono" | "tape" | "cd" | "aux";
+
 interface Source {
   key: string;
   label: string;
   enabled: boolean;
 }
 
-// Milestone 1: only the Library source is live. The rest render disabled,
-// like input buttons on a receiver that aren't hooked up yet.
+// M2: the receiver inputs are live. Radio (M3) and Stream (M5) stay stubbed.
 const SOURCES: Source[] = [
-  { key: "phono", label: "Phono", enabled: false },
-  { key: "tape", label: "Tape", enabled: false },
-  { key: "cd", label: "CD", enabled: false },
-  { key: "aux", label: "Aux", enabled: false },
+  { key: "phono", label: "Phono", enabled: true },
+  { key: "tape", label: "Tape", enabled: true },
+  { key: "cd", label: "CD", enabled: true },
+  { key: "aux", label: "Aux", enabled: true },
   { key: "radio", label: "Radio", enabled: false },
   { key: "library", label: "Library", enabled: true },
   { key: "stream", label: "Stream", enabled: false },
 ];
 
-export default function SourceSelector() {
+interface Props {
+  active: SelectableSource;
+  onSelect: (source: SelectableSource) => void;
+}
+
+export default function SourceSelector({ active, onSelect }: Props) {
   return (
     <nav className="source-selector" aria-label="Source selector">
       {SOURCES.map((s) => (
         <button
           key={s.key}
-          className={`source-button${s.enabled ? " active" : ""}`}
+          className={`source-button${s.key === active ? " active" : ""}`}
           disabled={!s.enabled}
           title={s.enabled ? s.label : "coming soon"}
+          onClick={() => {
+            if (s.enabled && s.key !== active) {
+              onSelect(s.key as SelectableSource);
+            }
+          }}
         >
           {s.label}
         </button>
