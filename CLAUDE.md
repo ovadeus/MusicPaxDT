@@ -47,9 +47,9 @@ thiserror.
 
 ## Roadmap (build in order; one milestone per focused session)
 - M1  Local playback: import + library + play + VU meter.  ✅ done (2026-06-12)
-- M2  Receiver/stereo-stack: line-in capture (turntable/cassette/CD/aux),  ← next
+- M2  Receiver/stereo-stack: line-in capture (turntable/cassette/CD/aux),  ✅ done (2026-06-12)
       RIAA EQ toggle, tone stack, source routing, recording of OWNED sources.
-- M3  Internet radio + podcasts/RSS + CC catalogs (Bandcamp/FMA/Jamendo).
+- M3  Internet radio + podcasts/RSS + CC catalogs (Bandcamp/FMA/Jamendo).  ← next
 - M4  DJ mode: dual decks, crossfader, EQ, tempo, hot cues, loops; BPM/key.
 - M5  AI subsystem (Anthropic/OpenAI/Ollama) + fingerprint pipeline + Mirror
       Engine + embedded YouTube playback lane.

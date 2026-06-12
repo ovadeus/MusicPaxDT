@@ -4,8 +4,10 @@ A local-first, open-source music & entertainment system — part library/aggrega
 part DJ tool, part vintage receiver. Cross-platform (Windows, macOS, Linux) on
 Tauri 2 with a Rust audio backend.
 
-**Status: Milestone 1** — local library with import, search, and decoded
-playback through a realtime engine with live VU metering.
+**Status: Milestone 2** — local library with import, search, and decoded
+playback, plus the receiver stage: line-in capture (phono/tape/CD/aux) with
+RIAA de-emphasis, a bass/treble tone stack, per-source input routing, and
+recording of your own line-in signal straight into the library.
 
 ## The capability rule
 
@@ -74,12 +76,26 @@ by file path. Double-click a track to play it.
   play/pause/stop/seek/volume and safe mid-session output-device switching
 - ✅ Real peak/RMS VU meters driven by engine events (`vu-levels`, `position`,
   `playback-state`)
-- ✅ Source selector with Library active; Phono/Tape/CD/Aux/Radio/Stream stubbed
-  ("coming soon")
 
-Later milestones: DJ decks & mixer, line-in capture, internet radio, YouTube
-embeds (official IFrame player only), AI integrations — all behind the same
-`SourceAdapter` trait and capability gate.
+## Milestone 2 scope (receiver)
+
+- ✅ Line-in monitoring: cpal input stream → relay thread (DSP + resample) →
+  the same lock-free output path; Phono/Tape/CD/Aux source buttons are live
+- ✅ RIAA de-emphasis for turntables without a phono preamp — bilinear-mapped
+  75/318/3180 µs curve with a per-rate optimized correction zero (≤ ~0.3 dB
+  error across 20 Hz – 20 kHz); engages automatically on Phono, toggleable
+- ✅ Tone stack: ±12 dB bass (120 Hz) and treble (8 kHz) RBJ shelves, applied
+  live without interrupting the stream
+- ✅ Source routing: each receiver input remembers its capture device
+  (persisted in settings)
+- ✅ Recording: the post-DSP, pre-volume signal is teed to a recorder thread
+  writing float32 WAV at the input's native rate; stopping inserts the file
+  into the library as an OWNED `line_in` track
+- ✅ VU meters, transport, and volume work identically for live input
+
+Later milestones: internet radio, DJ decks & mixer, YouTube embeds (official
+IFrame player only), AI integrations — all behind the same `SourceAdapter`
+trait and capability gate.
 
 ## Repository layout
 
@@ -87,7 +103,8 @@ embeds (official IFrame player only), AI integrations — all behind the same
 src/                  React/TS frontend (lib/ipc.ts is the only invoke() surface)
 src-tauri/src/
   commands.rs         Tauri command handlers (IPC surface)
-  audio/              engine (cpal host thread), decode (symphonia), meters
+  audio/              engine (cpal host thread), decode (symphonia), meters,
+                      input (line-in capture + recorder), riaa (RIAA + tone DSP)
   library/            db (rusqlite + FTS5 migrations), model, scan (walkdir + lofty)
   sources/            SourceAdapter trait + Local files adapter
 ```
