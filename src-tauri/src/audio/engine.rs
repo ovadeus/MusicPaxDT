@@ -817,6 +817,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    #[ignore = "requires an audio output device"]
+    fn device_enumeration_reports_a_default() {
+        let devices = list_devices().expect("device enumeration");
+        assert!(!devices.is_empty(), "expected at least one output device");
+        assert_eq!(
+            devices.iter().filter(|d| d.is_default).count(),
+            1,
+            "exactly one device should be marked default: {devices:?}"
+        );
+    }
+
     /// DoD: the engine must refuse to load any non-OWNED track.
     #[test]
     fn engine_rejects_non_owned_tracks() {
