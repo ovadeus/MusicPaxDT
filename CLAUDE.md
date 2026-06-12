@@ -46,8 +46,8 @@ thiserror.
   any paid LLM call; show cost estimate and a spend cap for cloud providers.
 
 ## Roadmap (build in order; one milestone per focused session)
-- M1  Local playback: import + library + play + VU meter.  ← current
-- M2  Receiver/stereo-stack: line-in capture (turntable/cassette/CD/aux),
+- M1  Local playback: import + library + play + VU meter.  ✅ done (2026-06-12)
+- M2  Receiver/stereo-stack: line-in capture (turntable/cassette/CD/aux),  ← next
       RIAA EQ toggle, tone stack, source routing, recording of OWNED sources.
 - M3  Internet radio + podcasts/RSS + CC catalogs (Bandcamp/FMA/Jamendo).
 - M4  DJ mode: dual decks, crossfader, EQ, tempo, hot cues, loops; BPM/key.
@@ -55,6 +55,13 @@ thiserror.
       Engine + embedded YouTube playback lane.
 - M6  SoundCloud (browse/link), AV capture (DVD/movies), MIDI/HID controllers,
       plugin SDK, theme marketplace.
+
+## Build notes
+- Cargo.lock pins transitive `time` to 0.3.47. time 0.3.48 (2026-06-12) breaks
+  tauri-utils/cookie with E0119 coherence errors on stable Rust. If a lockfile
+  regen breaks the build there: `cargo update time --precise 0.3.47`.
+- Run `cargo test -- --include-ignored` for the live audio tests (needs an
+  output device); plain `cargo test` skips them.
 
 ## License
 GPLv3 or MPL-2.0 (decide before adding copyleft-incompatible deps). Honor
