@@ -29,6 +29,13 @@ struct StatePayload {
     state: PlaybackState,
 }
 
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecordingPayload {
+    recording: bool,
+    recorded_ms: u64,
+}
+
 /// Pushes engine state to the frontend: "vu-levels" at ~30 Hz while playing,
 /// "position" at ~5 Hz, and "playback-state" on every transition. Reads only
 /// atomics written by the audio callback — real levels, not faked.
@@ -38,6 +45,7 @@ pub fn spawn_emitter(app: AppHandle, shared: Arc<Shared>) {
         .spawn(move || {
             let mut last_state = u8::MAX;
             let mut last_position = u64::MAX;
+            let mut last_recording = false;
             let mut levels_were_zero = false;
             let mut tick: u32 = 0;
             loop {
@@ -79,6 +87,18 @@ pub fn spawn_emitter(app: AppHandle, shared: Arc<Shared>) {
                         last_position = position_ms;
                         let _ = app.emit("position", PositionPayload { position_ms });
                     }
+                }
+
+                let recording = shared.recording.load(Ordering::Acquire);
+                if recording != last_recording || (recording && tick.is_multiple_of(8)) {
+                    last_recording = recording;
+                    let _ = app.emit(
+                        "recording-state",
+                        RecordingPayload {
+                            recording,
+                            recorded_ms: shared.recorded_ms(),
+                        },
+                    );
                 }
             }
         });

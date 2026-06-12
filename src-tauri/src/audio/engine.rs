@@ -11,6 +11,8 @@ use rubato::{FftFixedIn, Resampler};
 use serde::Serialize;
 
 use crate::audio::decode::AudioFileDecoder;
+use crate::audio::input::{self, LineInSession, RecCmd, RecordingStats};
+use crate::audio::riaa::DspParams;
 use crate::error::{AppError, AppResult};
 use crate::library::model::{Capability, Track};
 use crate::state::lock_unpoisoned;
@@ -75,6 +77,13 @@ pub struct Shared {
     pub peak_r_bits: AtomicU32,
     pub rms_l_bits: AtomicU32,
     pub rms_r_bits: AtomicU32,
+    // Receiver DSP + recording (read by the line-in relay thread).
+    pub riaa_on: AtomicBool,
+    pub bass_db_bits: AtomicU32,
+    pub treble_db_bits: AtomicU32,
+    pub recording: AtomicBool,
+    pub rec_frames: AtomicU64,
+    pub in_rate: AtomicU32,
 }
 
 impl Shared {
@@ -92,7 +101,26 @@ impl Shared {
             peak_r_bits: AtomicU32::new(0),
             rms_l_bits: AtomicU32::new(0),
             rms_r_bits: AtomicU32::new(0),
+            riaa_on: AtomicBool::new(false),
+            bass_db_bits: AtomicU32::new(0.0f32.to_bits()),
+            treble_db_bits: AtomicU32::new(0.0f32.to_bits()),
+            recording: AtomicBool::new(false),
+            rec_frames: AtomicU64::new(0),
+            in_rate: AtomicU32::new(44_100),
         }
+    }
+
+    pub fn dsp_params(&self) -> DspParams {
+        DspParams {
+            riaa: self.riaa_on.load(Ordering::Relaxed),
+            bass_db: f32::from_bits(self.bass_db_bits.load(Ordering::Relaxed)),
+            treble_db: f32::from_bits(self.treble_db_bits.load(Ordering::Relaxed)),
+        }
+    }
+
+    pub fn recorded_ms(&self) -> u64 {
+        let rate = self.in_rate.load(Ordering::Relaxed).max(1) as u64;
+        self.rec_frames.load(Ordering::Relaxed) * 1000 / rate
     }
 
     pub fn playback_state(&self) -> PlaybackState {
@@ -139,6 +167,42 @@ enum Cmd {
         name: Option<String>,
         reply: mpsc::Sender<Result<(), String>>,
     },
+    StartLineIn {
+        input: Option<String>,
+        /// Replies with (resolved input device name, input sample rate).
+        reply: mpsc::Sender<Result<(String, u32), String>>,
+    },
+    StartRecording {
+        path: std::path::PathBuf,
+        reply: mpsc::Sender<Result<(), String>>,
+    },
+    StopRecording {
+        reply: mpsc::Sender<Result<RecordingStats, String>>,
+    },
+}
+
+/// Identity of the active line-in source, mirrored for status queries.
+#[derive(Debug, Clone)]
+pub struct LineInInfo {
+    pub source: String,
+    pub input_device: String,
+    pub input_rate: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EngineStatus {
+    pub mode: String, // "library" | "lineIn"
+    pub source: Option<String>,
+    pub input_device: Option<String>,
+    pub riaa: bool,
+    pub bass_db: f32,
+    pub treble_db: f32,
+    pub recording: bool,
+    pub recorded_ms: u64,
+    pub state: PlaybackState,
+    pub position_ms: u64,
+    pub volume: f32,
 }
 
 /// Send + Sync handle to the audio engine, safe to store in Tauri state.
@@ -148,6 +212,7 @@ pub struct EngineHandle {
     pub shared: Arc<Shared>,
     tx: mpsc::Sender<Cmd>,
     current: Mutex<Option<Track>>,
+    line_in: Mutex<Option<LineInInfo>>,
 }
 
 impl EngineHandle {
@@ -163,6 +228,7 @@ impl EngineHandle {
             shared,
             tx,
             current: Mutex::new(None),
+            line_in: Mutex::new(None),
         })
     }
 
@@ -191,6 +257,7 @@ impl EngineHandle {
             reply,
         })?;
         let duration = Self::wait(rx)?;
+        *lock_unpoisoned(&self.line_in) = None;
         let mut slot = lock_unpoisoned(&self.current);
         let mut track = track;
         if track.duration_ms.is_none() {
@@ -198,6 +265,66 @@ impl EngineHandle {
         }
         *slot = Some(track);
         Ok(())
+    }
+
+    /// Switch to a live line-in source (phono/tape/cd/aux). Line-in is OWNED
+    /// by definition — it is the user's own signal.
+    pub fn start_line_in(&self, source: &str, input: Option<String>) -> AppResult<LineInInfo> {
+        let (reply, rx) = mpsc::channel();
+        self.send(Cmd::StartLineIn { input, reply })?;
+        let (input_device, input_rate) = Self::wait(rx)?;
+        let info = LineInInfo {
+            source: source.to_string(),
+            input_device,
+            input_rate,
+        };
+        *lock_unpoisoned(&self.current) = None;
+        *lock_unpoisoned(&self.line_in) = Some(info.clone());
+        Ok(info)
+    }
+
+    pub fn line_in_info(&self) -> Option<LineInInfo> {
+        lock_unpoisoned(&self.line_in).clone()
+    }
+
+    pub fn set_dsp(&self, params: DspParams) {
+        self.shared.riaa_on.store(params.riaa, Ordering::Relaxed);
+        self.shared
+            .bass_db_bits
+            .store(params.bass_db.clamp(-12.0, 12.0).to_bits(), Ordering::Relaxed);
+        self.shared
+            .treble_db_bits
+            .store(params.treble_db.clamp(-12.0, 12.0).to_bits(), Ordering::Relaxed);
+    }
+
+    pub fn start_recording(&self, path: std::path::PathBuf) -> AppResult<()> {
+        let (reply, rx) = mpsc::channel();
+        self.send(Cmd::StartRecording { path, reply })?;
+        Self::wait(rx)
+    }
+
+    pub fn stop_recording(&self) -> AppResult<RecordingStats> {
+        let (reply, rx) = mpsc::channel();
+        self.send(Cmd::StopRecording { reply })?;
+        Self::wait(rx)
+    }
+
+    pub fn status(&self) -> EngineStatus {
+        let line_in = self.line_in_info();
+        let params = self.shared.dsp_params();
+        EngineStatus {
+            mode: if line_in.is_some() { "lineIn" } else { "library" }.to_string(),
+            source: line_in.as_ref().map(|i| i.source.clone()),
+            input_device: line_in.as_ref().map(|i| i.input_device.clone()),
+            riaa: params.riaa,
+            bass_db: params.bass_db,
+            treble_db: params.treble_db,
+            recording: self.shared.recording.load(Ordering::Acquire),
+            recorded_ms: self.shared.recorded_ms(),
+            state: self.shared.playback_state(),
+            position_ms: self.shared.position_ms(),
+            volume: self.shared.volume(),
+        }
     }
 
     pub fn play(&self) -> AppResult<()> {
@@ -211,6 +338,7 @@ impl EngineHandle {
     }
 
     pub fn stop(&self) -> AppResult<()> {
+        *lock_unpoisoned(&self.line_in) = None;
         self.send(Cmd::Stop)
     }
 
@@ -234,6 +362,9 @@ impl EngineHandle {
     }
 
     pub fn now_playing(&self) -> Option<NowPlaying> {
+        if lock_unpoisoned(&self.line_in).is_some() {
+            return None;
+        }
         let track = lock_unpoisoned(&self.current).clone()?;
         Some(NowPlaying {
             track,
@@ -289,6 +420,7 @@ struct AudioHost {
     device_name: Option<String>,
     current_path: Option<String>,
     session: Option<Session>,
+    line_in: Option<LineInSession>,
 }
 
 fn host_loop(rx: mpsc::Receiver<Cmd>, shared: Arc<Shared>) {
@@ -297,6 +429,7 @@ fn host_loop(rx: mpsc::Receiver<Cmd>, shared: Arc<Shared>) {
         device_name: None,
         current_path: None,
         session: None,
+        line_in: None,
     };
     loop {
         match rx.recv_timeout(Duration::from_millis(100)) {
@@ -311,6 +444,7 @@ impl AudioHost {
     fn handle(&mut self, cmd: Cmd) {
         match cmd {
             Cmd::Load { path, reply } => {
+                self.stop_line_in();
                 self.current_path = Some(path);
                 match self.start_session(0) {
                     Ok(duration) => {
@@ -325,7 +459,7 @@ impl AudioHost {
                 }
             }
             Cmd::Play { reply } => {
-                if self.session.is_none() {
+                if self.line_in.is_none() && self.session.is_none() {
                     if self.current_path.is_none() {
                         let _ = reply.send(Err("no track loaded".into()));
                         return;
@@ -340,13 +474,17 @@ impl AudioHost {
                 let _ = reply.send(Ok(()));
             }
             Cmd::Pause => {
-                if self.session.is_some() {
+                if self.session.is_some() || self.line_in.is_some() {
                     self.shared.state.store(STATE_PAUSED, Ordering::Relaxed);
                     self.shared.zero_meters();
                 }
             }
             Cmd::Stop => self.teardown(),
             Cmd::Seek { ms, reply } => {
+                if self.line_in.is_some() {
+                    let _ = reply.send(Err("cannot seek a live input".into()));
+                    return;
+                }
                 if self.current_path.is_none() {
                     let _ = reply.send(Err("no track loaded".into()));
                     return;
@@ -366,6 +504,31 @@ impl AudioHost {
                 }
             }
             Cmd::SetDevice { name, reply } => {
+                if self.line_in.is_some() {
+                    if self.shared.recording.load(Ordering::Acquire) {
+                        let _ = reply
+                            .send(Err("stop the recording before switching devices".into()));
+                        return;
+                    }
+                    self.device_name = name;
+                    // Rebuild the line-in chain on the new output device.
+                    let input = self
+                        .line_in
+                        .as_ref()
+                        .map(|s| s.input_device_name.clone());
+                    let state = self.shared.state.load(Ordering::Relaxed);
+                    match self.start_line_in_session(input.as_deref()) {
+                        Ok(_) => {
+                            self.shared.state.store(state, Ordering::Relaxed);
+                            let _ = reply.send(Ok(()));
+                        }
+                        Err(e) => {
+                            self.teardown();
+                            let _ = reply.send(Err(e));
+                        }
+                    }
+                    return;
+                }
                 self.device_name = name;
                 if self.session.is_some() {
                     // Rebuild the session on the new device at the current position.
@@ -386,7 +549,94 @@ impl AudioHost {
                     let _ = reply.send(self.find_device().map(|_| ()));
                 }
             }
+            Cmd::StartLineIn { input, reply } => {
+                self.session = None;
+                match self.start_line_in_session(input.as_deref()) {
+                    Ok(info) => {
+                        // A receiver input goes live immediately.
+                        self.shared.state.store(STATE_PLAYING, Ordering::Relaxed);
+                        let _ = reply.send(Ok(info));
+                    }
+                    Err(e) => {
+                        self.teardown();
+                        let _ = reply.send(Err(e));
+                    }
+                }
+            }
+            Cmd::StartRecording { path, reply } => {
+                let Some(session) = self.line_in.as_ref() else {
+                    let _ = reply.send(Err("select a line-in source before recording".into()));
+                    return;
+                };
+                if self.shared.recording.load(Ordering::Acquire) {
+                    let _ = reply.send(Err("already recording".into()));
+                    return;
+                }
+                let Some(tx) = session.rec_tx() else {
+                    let _ = reply.send(Err("recorder unavailable".into()));
+                    return;
+                };
+                let (rtx, rrx) = mpsc::channel();
+                if tx.send(RecCmd::Start { path, reply: rtx }).is_err() {
+                    let _ = reply.send(Err("recorder thread is not running".into()));
+                    return;
+                }
+                match rrx.recv_timeout(Duration::from_secs(5)) {
+                    Ok(Ok(())) => {
+                        self.shared.recording.store(true, Ordering::Release);
+                        let _ = reply.send(Ok(()));
+                    }
+                    Ok(Err(e)) => {
+                        let _ = reply.send(Err(e));
+                    }
+                    Err(_) => {
+                        let _ = reply.send(Err("recorder did not respond".into()));
+                    }
+                }
+            }
+            Cmd::StopRecording { reply } => {
+                self.shared.recording.store(false, Ordering::Release);
+                let Some(session) = self.line_in.as_ref() else {
+                    let _ = reply.send(Err("no line-in session".into()));
+                    return;
+                };
+                let Some(tx) = session.rec_tx() else {
+                    let _ = reply.send(Err("recorder unavailable".into()));
+                    return;
+                };
+                let (rtx, rrx) = mpsc::channel();
+                if tx.send(RecCmd::Stop { reply: rtx }).is_err() {
+                    let _ = reply.send(Err("recorder thread is not running".into()));
+                    return;
+                }
+                match rrx.recv_timeout(Duration::from_secs(10)) {
+                    Ok(result) => {
+                        let _ = reply.send(result);
+                    }
+                    Err(_) => {
+                        let _ = reply.send(Err("recorder did not respond".into()));
+                    }
+                }
+            }
         }
+    }
+
+    /// (Re)start the line-in chain on the current output device. Leaves the
+    /// playback state untouched; callers set it after.
+    fn start_line_in_session(&mut self, input: Option<&str>) -> Result<(String, u32), String> {
+        self.line_in = None;
+        self.session = None;
+        let device = self.find_device()?;
+        let session = input::start_line_in(self.shared.clone(), &device, input)?;
+        let info = (session.input_device_name.clone(), session.input_rate);
+        self.shared.in_rate.store(session.input_rate, Ordering::Relaxed);
+        self.line_in = Some(session);
+        Ok(info)
+    }
+
+    fn stop_line_in(&mut self) {
+        self.shared.recording.store(false, Ordering::Release);
+        self.line_in = None; // Drop finalizes any in-flight recording file.
     }
 
     /// Natural end of track: tear the session down and report stopped.
@@ -397,6 +647,7 @@ impl AudioHost {
     }
 
     fn teardown(&mut self) {
+        self.stop_line_in();
         self.session = None;
         self.shared.state.store(STATE_STOPPED, Ordering::Relaxed);
         self.shared.base_ms.store(0, Ordering::Relaxed);
@@ -603,7 +854,7 @@ fn push_interleaved(producer: &mut Producer<f32>, samples: &[f32], stop: &Atomic
 // it only pops the ring buffer and touches atomics.
 // ---------------------------------------------------------------------------
 
-fn build_stream(
+pub(crate) fn build_stream(
     device: &Device,
     supported: &cpal::SupportedStreamConfig,
     consumer: Consumer<f32>,
@@ -827,6 +1078,69 @@ mod tests {
             1,
             "exactly one device should be marked default: {devices:?}"
         );
+    }
+
+    /// M2 live path: capture from the default input, monitor through the
+    /// default output, record a second, and confirm the WAV lands on disk.
+    /// Needs input+output devices and microphone permission.
+    #[test]
+    #[ignore = "requires audio input/output devices and mic permission"]
+    fn line_in_monitors_and_records() {
+        let engine = EngineHandle::new().expect("engine should start");
+        engine.set_volume(0.0); // avoid a feedback loop through the speakers
+
+        let info = match engine.start_line_in("aux", None) {
+            Ok(i) => i,
+            Err(e) => {
+                eprintln!("SKIP: line-in unavailable in this environment: {e}");
+                return;
+            }
+        };
+        assert!(!info.input_device.is_empty());
+        assert_eq!(engine.status().mode, "lineIn");
+        assert!(engine.now_playing().is_none(), "no track while line-in is live");
+
+        // Monitor clock must advance even with a silent input.
+        std::thread::sleep(Duration::from_millis(600));
+        let elapsed = engine.shared.position_ms();
+        assert!(elapsed > 200, "monitor clock should advance, got {elapsed}ms");
+
+        // DSP params reach the relay without breaking the stream.
+        engine.set_dsp(DspParams {
+            riaa: true,
+            bass_db: 6.0,
+            treble_db: -3.0,
+        });
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(engine.status().riaa);
+
+        // Record ~1 s and verify a decodable OWNED-quality WAV is produced.
+        let dir =
+            std::env::temp_dir().join(format!("stack-linein-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let wav = dir.join("capture.wav");
+        engine
+            .start_recording(wav.clone())
+            .expect("start recording");
+        std::thread::sleep(Duration::from_millis(1000));
+        assert!(engine.status().recording);
+        let stats = engine.stop_recording().expect("stop recording");
+        assert!(
+            stats.duration_ms >= 700,
+            "expected ~1s recorded, got {}ms",
+            stats.duration_ms
+        );
+        let mut dec = AudioFileDecoder::open(&wav).expect("recorded wav must decode");
+        assert_eq!(dec.sample_rate, info.input_rate);
+        let mut frames = 0usize;
+        while let Ok(Some(chunk)) = dec.next_stereo() {
+            frames += chunk.len() / 2;
+        }
+        assert_eq!(frames as u64, stats.frames, "decoded frames match stats");
+
+        engine.stop().expect("stop");
+        assert_eq!(engine.status().mode, "library");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// DoD: the engine must refuse to load any non-OWNED track.
