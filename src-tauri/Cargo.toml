@@ -26,3 +26,6 @@ rubato = "0.16"
 rtrb = "0.3"
 lofty = "0.21"
 walkdir = "2"
+# Already in the dependency tree via tauri (pinned to 0.3.47 in Cargo.lock —
+# 0.3.48 breaks tauri-utils/cookie with E0119). Used for recording filenames.
+time = { version = "0.3", features = ["local-offset"] }

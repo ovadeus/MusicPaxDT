@@ -200,6 +200,28 @@ pub fn open_in_memory_for_tests(conn: &Connection) {
     migrate(conn).expect("test migration failed");
 }
 
+pub fn get_setting(conn: &Connection, key: &str) -> AppResult<Option<String>> {
+    Ok(conn
+        .query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| {
+            r.get(0)
+        })
+        .optional()?)
+}
+
+pub fn set_setting(conn: &Connection, key: &str, value: &str) -> AppResult<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO settings(key, value) VALUES (?1, ?2)",
+        params![key, value],
+    )?;
+    Ok(())
+}
+
+pub fn get_track_by_uri(conn: &Connection, uri: &str) -> AppResult<Option<Track>> {
+    Ok(conn
+        .query_row("SELECT * FROM tracks WHERE uri = ?1", [uri], track_from_row)
+        .optional()?)
+}
+
 /// Record a successful load: bump play_count and append to history.
 pub fn record_play(conn: &Connection, track_id: i64, played_at: i64) -> AppResult<()> {
     conn.execute(

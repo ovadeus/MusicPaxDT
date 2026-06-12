@@ -38,6 +38,14 @@ pub fn run() {
             commands::seek,
             commands::set_volume,
             commands::now_playing,
+            commands::get_audio_input_devices,
+            commands::start_line_in,
+            commands::set_input_device,
+            commands::set_riaa,
+            commands::set_tone,
+            commands::engine_status,
+            commands::start_recording,
+            commands::stop_recording,
         ])
         .build(tauri::generate_context!());
 
