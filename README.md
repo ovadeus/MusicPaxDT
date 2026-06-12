@@ -62,6 +62,11 @@ on macOS. Click **Import Folder** to scan a directory recursively; tags are read
 with lofty, untagged files fall back to their file name, and re-imports dedupe
 by file path. Double-click a track to play it.
 
+> **macOS:** the first time you select a line-in source, macOS asks for
+> microphone (audio-input) permission — capture is silent until you allow it.
+> If you denied it, re-enable under System Settings → Privacy & Security →
+> Microphone.
+
 > **Note:** `Cargo.lock` pins the transitive `time` crate to 0.3.47.
 > `time` 0.3.48 (2026-06-12) trips an E0119 coherence error in `tauri-utils`
 > and `cookie` on current stable Rust. If you regenerate the lockfile and the
