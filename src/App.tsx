@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import LibraryTable from "./components/LibraryTable";
+import Logo from "./components/Logo";
 import NowPlayingBar from "./components/NowPlayingBar";
 import ReceiverPanel from "./components/ReceiverPanel";
 import SourceSelector, { type SelectableSource } from "./components/SourceSelector";
@@ -157,7 +158,7 @@ export default function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <div className="brand">STACK</div>
+        <Logo />
         <SourceSelector active={source} onSelect={handleSelectSource} />
         <div className="header-controls">
           <select

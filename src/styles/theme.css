@@ -53,10 +53,22 @@ body {
 }
 
 .brand {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.brand-word {
   font-size: 18px;
   font-weight: 800;
   letter-spacing: 0.22em;
-  color: var(--accent);
+  color: #ffffff;
+}
+
+.brand-arrow {
+  height: 20px;
+  width: 20px;
+  fill: #29abe2;
 }
 
 .header-controls {
