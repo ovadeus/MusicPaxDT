@@ -1,0 +1,42 @@
+# App-command ACL. Required because the release UI is served from
+# http://localhost (see tauri-plugin-localhost in lib.rs) — Tauri treats that
+# as a remote origin and only allows commands that an explicit app permission
+# grants. This lists every STACK command; the capability references it.
+
+[[permission]]
+identifier = "allow-app-commands"
+description = "Allow the STACK frontend to call all application commands."
+commands.allow = [
+    "import_folder",
+    "list_tracks",
+    "get_audio_devices",
+    "set_output_device",
+    "load_track",
+    "play",
+    "pause",
+    "stop",
+    "seek",
+    "set_volume",
+    "now_playing",
+    "get_audio_input_devices",
+    "start_line_in",
+    "set_input_device",
+    "set_riaa",
+    "set_tone",
+    "engine_status",
+    "start_recording",
+    "stop_recording",
+    "get_settings",
+    "set_setting",
+    "recording_format_label",
+    "integration_status",
+    "set_youtube_api_key",
+    "set_spotify_credentials",
+    "import_stream_url",
+    "mirror_playlist",
+    "list_playlists",
+    "create_playlist",
+    "playlist_tracks",
+    "add_to_playlist",
+    "delete_playlist",
+]
