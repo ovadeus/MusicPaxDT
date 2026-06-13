@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Settings as SettingsIcon, Sparkles } from "lucide-react";
+import { Sparkles } from "lucide-react";
 import AddUrlModal from "./components/AddUrlModal";
 import EnrichReviewModal from "./components/EnrichReviewModal";
+import ModeMenu, { type UiMode } from "./components/ModeMenu";
 import TrackEditModal from "./components/TrackEditModal";
 import LibraryTable from "./components/LibraryTable";
 import Logo from "./components/Logo";
@@ -60,6 +61,15 @@ export default function App() {
     capped: boolean;
   } | null>(null);
   const [proposals, setProposals] = useState<EnrichProposal[] | null>(null);
+  const [mode, setMode] = useState<UiMode>(
+    () => (localStorage.getItem("ui.mode") as UiMode) || "listening",
+  );
+  const curator = mode === "curator";
+
+  const changeMode = (m: UiMode) => {
+    setMode(m);
+    localStorage.setItem("ui.mode", m);
+  };
   const [formatLabel, setFormatLabel] = useState("");
   const [stream, setStream] = useState<Track | null>(null);
   const [streamPlaying, setStreamPlaying] = useState(true);
@@ -337,33 +347,35 @@ export default function App() {
               </option>
             ))}
           </select>
-          <button
-            className="addurl-button"
-            onClick={() => setAddUrlOpen(true)}
-            title="Add a YouTube URL or mirror a Spotify playlist"
-          >
-            Add URL
-          </button>
-          {source === "library" && (
-            <button
-              className="addurl-button enrich-all"
-              onClick={handleEnrichAll}
-              disabled={tracks.length === 0 || enrichProgress != null}
-              title="Auto-fill tags for the visible tracks (free MusicBrainz/fingerprint first, AI only if configured)"
-            >
-              <Sparkles size={14} /> Enrich
-            </button>
+          {curator && (
+            <>
+              <button
+                className="addurl-button"
+                onClick={() => setAddUrlOpen(true)}
+                title="Add a YouTube URL or mirror a Spotify playlist"
+              >
+                Add URL
+              </button>
+              {source === "library" && (
+                <button
+                  className="addurl-button enrich-all"
+                  onClick={handleEnrichAll}
+                  disabled={tracks.length === 0 || enrichProgress != null}
+                  title="Auto-fill tags for the visible tracks (free MusicBrainz/fingerprint first, AI only if configured)"
+                >
+                  <Sparkles size={14} /> Enrich
+                </button>
+              )}
+              <button className="import-button" onClick={handleImport} disabled={busy}>
+                {busy ? "Importing…" : "Import Folder"}
+              </button>
+            </>
           )}
-          <button className="import-button" onClick={handleImport} disabled={busy}>
-            {busy ? "Importing…" : "Import Folder"}
-          </button>
-          <button
-            className="settings-button"
-            onClick={() => setSettingsOpen(true)}
-            title="Settings"
-          >
-            <SettingsIcon size={16} />
-          </button>
+          <ModeMenu
+            mode={mode}
+            onMode={changeMode}
+            onOpenSettings={() => setSettingsOpen(true)}
+          />
         </div>
       </header>
 
@@ -407,6 +419,7 @@ export default function App() {
           <PlaylistSidebar
             playlists={playlists}
             view={view}
+            curator={curator}
             onSelect={setView}
             onCreate={(name) => {
               ipc
@@ -437,6 +450,7 @@ export default function App() {
             onActivate={playTrack}
             onEdit={setEditTrack}
             onEnrich={handleEnrichTrack}
+            curator={curator}
             enrichingId={enrichingId}
             nowPlayingId={
               stream ? stream.id : playState === "stopped" ? null : (now?.track.id ?? null)

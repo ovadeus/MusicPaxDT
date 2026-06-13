@@ -7,6 +7,7 @@ export type LibraryView = { kind: "all" } | { kind: "playlist"; id: number; name
 interface Props {
   playlists: PlaylistInfo[];
   view: LibraryView;
+  curator: boolean;
   onSelect: (view: LibraryView) => void;
   onCreate: (name: string) => void;
   onDelete: (id: number) => void;
@@ -14,7 +15,15 @@ interface Props {
 
 /// The "building" rail: every playlist can mix local OWNED files and
 /// STREAM_PLAYABLE entries; mirrored playlists land here automatically.
-export default function PlaylistSidebar({ playlists, view, onSelect, onCreate, onDelete }: Props) {
+/// Create/delete controls only appear in Curator mode.
+export default function PlaylistSidebar({
+  playlists,
+  view,
+  curator,
+  onSelect,
+  onCreate,
+  onDelete,
+}: Props) {
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
 
@@ -36,13 +45,15 @@ export default function PlaylistSidebar({ playlists, view, onSelect, onCreate, o
 
       <div className="sidebar-heading">
         <span>Playlists</span>
-        <button
-          className="sidebar-add"
-          title="New playlist"
-          onClick={() => setCreating(true)}
-        >
-          <Plus size={13} />
-        </button>
+        {curator && (
+          <button
+            className="sidebar-add"
+            title="New playlist"
+            onClick={() => setCreating(true)}
+          >
+            <Plus size={13} />
+          </button>
+        )}
       </div>
 
       {creating && (
@@ -72,16 +83,18 @@ export default function PlaylistSidebar({ playlists, view, onSelect, onCreate, o
             {p.name}
           </span>
           <span className="sidebar-count">{p.trackCount}</span>
-          <button
-            className="sidebar-delete"
-            title="Delete playlist (tracks stay in the library)"
-            onClick={(e) => {
-              e.stopPropagation();
-              onDelete(p.id);
-            }}
-          >
-            <X size={11} />
-          </button>
+          {curator && (
+            <button
+              className="sidebar-delete"
+              title="Delete playlist (tracks stay in the library)"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete(p.id);
+              }}
+            >
+              <X size={11} />
+            </button>
+          )}
         </div>
       ))}
     </aside>

@@ -20,6 +20,7 @@ interface Props {
   onActivate: (track: Track) => void;
   onEdit: (track: Track) => void;
   onEnrich: (track: Track) => void;
+  curator: boolean;
   enrichingId: number | null;
   nowPlayingId: number | null;
   playlists: PlaylistInfo[];
@@ -84,6 +85,7 @@ export default function LibraryTable(props: Props) {
     onActivate,
     onEdit,
     onEnrich,
+    curator,
     enrichingId,
     nowPlayingId,
     playlists,
@@ -131,13 +133,13 @@ export default function LibraryTable(props: Props) {
                   {arrow(c.field)}
                 </th>
               ))}
-              <th className="add-col" />
+              {curator && <th className="add-col" />}
             </tr>
           </thead>
           <tbody>
             {tracks.length === 0 ? (
               <tr>
-                <td className="empty-row" colSpan={COLUMNS.length + 2}>
+                <td className="empty-row" colSpan={COLUMNS.length + 1 + (curator ? 1 : 0)}>
                   {heading
                     ? "This playlist is empty — add tracks with the + button."
                     : "Library is empty — use “Import Folder” or “Add URL” to add music."}
@@ -163,6 +165,7 @@ export default function LibraryTable(props: Props) {
                     <td>{t.genre ?? "—"}</td>
                     <td>{t.year ?? "—"}</td>
                     <td className="num">{formatDuration(t.durationMs)}</td>
+                    {curator && (
                     <td className="add-col">
                       <div className="row-actions">
                         <button
@@ -208,6 +211,7 @@ export default function LibraryTable(props: Props) {
                         )}
                       </div>
                     </td>
+                    )}
                   </tr>
                 );
               })
