@@ -11,6 +11,7 @@ use crate::error::{AppError, AppResult};
 use crate::library::db;
 use crate::library::model::{Capability, NewTrack, PlaylistInfo, Track};
 use crate::net::{http, keyring_get, keyring_set};
+use crate::sources::radio::{self, RadioStation};
 use crate::sources::{detect, spotify, youtube, DetectedInput};
 use crate::state::{lock_unpoisoned, AppState};
 
@@ -50,6 +51,46 @@ pub fn set_youtube_api_key(key: String) -> AppResult<()> {
 pub fn set_spotify_credentials(client_id: String, client_secret: String) -> AppResult<()> {
     keyring_set("spotify_client_id", client_id.trim()).map_err(AppError::Other)?;
     keyring_set("spotify_client_secret", client_secret.trim()).map_err(AppError::Other)
+}
+
+// ---------------------------------------------------------------------------
+// Internet radio (Radio Browser) — browse, search, add to library
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn radio_top(limit: Option<u32>) -> AppResult<Vec<RadioStation>> {
+    radio::top(limit.unwrap_or(60)).await.map_err(AppError::Other)
+}
+
+#[tauri::command]
+pub async fn radio_search(query: String, limit: Option<u32>) -> AppResult<Vec<RadioStation>> {
+    radio::search(&query, limit.unwrap_or(60))
+        .await
+        .map_err(AppError::Other)
+}
+
+/// Save a station as a STREAM_PLAYABLE library track (source_kind = "radio").
+#[tauri::command]
+pub async fn import_radio_station(
+    name: String,
+    url: String,
+    favicon: Option<String>,
+    tags: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<Track> {
+    let new_track = NewTrack {
+        title: Some(name),
+        artist: Some("Radio".into()),
+        album: None,
+        year: None,
+        genre: tags,
+        duration_ms: None,
+        uri: url,
+        source_kind: "radio".into(),
+        capability: Capability::StreamPlayable,
+    };
+    let _ = favicon; // (art handling for radio favicons can come later)
+    insert_stream_track(&state, &new_track)
 }
 
 // ---------------------------------------------------------------------------

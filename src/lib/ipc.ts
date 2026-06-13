@@ -18,6 +18,7 @@ import type {
   NowPlaying,
   PlaybackState,
   PlaylistInfo,
+  RadioStation,
   RecordingState,
   SortSpec,
   Track,
@@ -224,6 +225,23 @@ export function addToPlaylist(playlistId: number, trackId: number): Promise<void
 
 export function deletePlaylist(playlistId: number): Promise<void> {
   return invoke<void>("delete_playlist", { playlistId });
+}
+
+export function radioTop(limit?: number): Promise<RadioStation[]> {
+  return invoke<RadioStation[]>("radio_top", { limit: limit ?? null });
+}
+
+export function radioSearch(query: string, limit?: number): Promise<RadioStation[]> {
+  return invoke<RadioStation[]>("radio_search", { query, limit: limit ?? null });
+}
+
+export function importRadioStation(station: RadioStation): Promise<Track> {
+  return invoke<Track>("import_radio_station", {
+    name: station.name,
+    url: station.url,
+    favicon: station.favicon,
+    tags: station.tags,
+  });
 }
 
 export function integrationStatus(): Promise<IntegrationStatus> {

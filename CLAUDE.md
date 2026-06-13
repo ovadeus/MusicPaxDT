@@ -49,7 +49,9 @@ thiserror.
 - M1  Local playback: import + library + play + VU meter.  ✅ done (2026-06-12)
 - M2  Receiver/stereo-stack: line-in capture (turntable/cassette/CD/aux),  ✅ done (2026-06-12)
       RIAA EQ toggle, tone stack, source routing, recording of OWNED sources.
-- M3  Internet radio + podcasts/RSS + CC catalogs (Bandcamp/FMA/Jamendo).  ← next
+- M3  Internet radio (Radio Browser) ✅ done (2026-06-13) — browse/search +
+      inline STREAM_PLAYABLE playback via webview <audio> + add-to-library.
+      Still to do: podcasts/RSS + CC catalogs (Bandcamp/FMA/Jamendo).  ← next
 - M5a (pulled forward 2026-06-12 by owner): YouTube embed lane + Mirror Engine
       v1 (Spotify playlist / text list → official YouTube embeds, heuristic
       matching, keyless search fallback) + playlists mixing OWNED and

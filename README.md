@@ -146,9 +146,18 @@ from a Settings path, then `PATH`, then common install locations; for a
 packaged build it should be bundled as a Tauri sidecar. Fingerprinting only
 works on OWNED local audio — never on streams.
 
-Later milestones: internet radio, DJ decks & mixer, the rest of the M5 AI
-subsystem — all behind the same `SourceAdapter` / `LLMProvider` traits and the
-capability gate.
+## Internet radio (M3)
+
+The **Radio** source browses and searches stations via the open
+[Radio Browser](https://www.radio-browser.info) directory (no key). Click a
+station to play it inline — it's `STREAM_PLAYABLE`, played through a webview
+`<audio>` element, never decoded into the OWNED engine and never recorded. In
+Curator mode, **+** adds a station to the library as a `radio` track so it can
+join playlists. Podcasts/RSS and CC catalogs (the rest of M3) are still to come.
+
+Later milestones: DJ decks & mixer, the rest of the M5 AI subsystem, and an
+outbound "Go Live" broadcaster (Icecast) — all behind the same
+`SourceAdapter` / `LLMProvider` traits and the capability gate.
 
 ## Repository layout
 

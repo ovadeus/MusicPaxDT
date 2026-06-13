@@ -4,6 +4,8 @@ import { Sparkles } from "lucide-react";
 import AddUrlModal from "./components/AddUrlModal";
 import EnrichReviewModal from "./components/EnrichReviewModal";
 import ModeMenu, { type UiMode } from "./components/ModeMenu";
+import RadioPanel from "./components/RadioPanel";
+import RadioPlayer from "./components/RadioPlayer";
 import TrackEditModal from "./components/TrackEditModal";
 import LibraryTable from "./components/LibraryTable";
 import Logo from "./components/Logo";
@@ -22,6 +24,7 @@ import type {
   NowPlaying,
   PlaybackState,
   PlaylistInfo,
+  RadioStation,
   RecordingState,
   SortSpec,
   Track,
@@ -203,7 +206,10 @@ export default function App() {
           setEngineStat(null);
           setSource("library");
           setPositionMs(0);
-        } else if (track.capability === "STREAM_PLAYABLE" && track.sourceKind === "youtube") {
+        } else if (
+          track.capability === "STREAM_PLAYABLE" &&
+          (track.sourceKind === "youtube" || track.sourceKind === "radio")
+        ) {
           await ipc.stop().catch(() => {});
           setNow(null);
           setStream(track);
@@ -212,7 +218,8 @@ export default function App() {
           setStreamDur(0);
           setStreamSeek(null);
           setEngineStat(null);
-          setSource("library");
+          // radio tracks keep the Radio panel open; others go to Library
+          if (track.sourceKind !== "radio") setSource("library");
         } else {
           showStatus("This entry can only be opened externally.");
         }
@@ -266,6 +273,14 @@ export default function App() {
         setSource("library");
         return;
       }
+      if (next === "radio") {
+        // Browse panel; the engine stays idle until a station is played.
+        await ipc.stop().catch(() => {});
+        setEngineStat(null);
+        setNow(null);
+        setSource("radio");
+        return;
+      }
       setStream(null);
       const stat = await ipc.startLineIn(next as LineInSource);
       setNow(null);
@@ -274,6 +289,29 @@ export default function App() {
     } catch (e) {
       showStatus(`${e}`);
     }
+  };
+
+  const playStation = (s: RadioStation) => {
+    void playTrack({
+      id: -1,
+      title: s.name,
+      artist: "Radio",
+      album: null,
+      year: null,
+      genre: s.tags,
+      bpm: null,
+      musicalKey: null,
+      durationMs: null,
+      uri: s.url,
+      sourceKind: "radio",
+      capability: "STREAM_PLAYABLE",
+      fingerprint: null,
+      musicbrainzId: null,
+      artPath: null,
+      rating: 0,
+      playCount: 0,
+      addedAt: 0,
+    });
   };
 
   const handleImport = async () => {
@@ -312,7 +350,8 @@ export default function App() {
     ipc.setVolume(level).catch((e) => showStatus(`${e}`));
   };
 
-  const lineIn = source !== "library" ? (source as LineInSource) : null;
+  const lineIn =
+    source !== "library" && source !== "radio" ? (source as LineInSource) : null;
 
   const handleStop = async () => {
     setStream(null);
@@ -400,7 +439,18 @@ export default function App() {
         </div>
       )}
 
-      {lineIn ? (
+      {source === "radio" ? (
+        <RadioPanel
+          curator={curator}
+          nowPlayingUrl={stream?.sourceKind === "radio" ? stream.uri : null}
+          onPlay={playStation}
+          onAdded={(name) => {
+            showStatus(`Added “${name}” to the library`);
+            refreshTracks();
+          }}
+          onError={showStatus}
+        />
+      ) : lineIn ? (
         <ReceiverPanel
           source={lineIn}
           status={engineStat}
@@ -472,7 +522,17 @@ export default function App() {
         </div>
       )}
 
-      {stream && (
+      {stream && stream.sourceKind === "radio" && (
+        <RadioPlayer
+          track={stream}
+          playing={streamPlaying}
+          volume={volume}
+          onPlayingChange={setStreamPlaying}
+          onError={showStatus}
+        />
+      )}
+
+      {stream && stream.sourceKind === "youtube" && (
         <StreamPlayer
           track={stream}
           playing={streamPlaying}

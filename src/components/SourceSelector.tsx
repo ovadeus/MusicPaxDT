@@ -1,4 +1,10 @@
-export type SelectableSource = "library" | "phono" | "tape" | "cd" | "aux";
+export type SelectableSource =
+  | "library"
+  | "phono"
+  | "tape"
+  | "cd"
+  | "aux"
+  | "radio";
 
 interface Source {
   key: string;
@@ -12,7 +18,7 @@ const SOURCES: Source[] = [
   { key: "tape", label: "Tape", enabled: true },
   { key: "cd", label: "CD", enabled: true },
   { key: "aux", label: "Aux", enabled: true },
-  { key: "radio", label: "Radio", enabled: false },
+  { key: "radio", label: "Radio", enabled: true },
   { key: "library", label: "Library", enabled: true },
   { key: "stream", label: "Stream", enabled: false },
 ];

@@ -54,6 +54,17 @@ export interface VuLevels {
 
 export type LineInSource = "phono" | "tape" | "cd" | "aux";
 
+export interface RadioStation {
+  uuid: string;
+  name: string;
+  url: string;
+  favicon: string | null;
+  tags: string | null;
+  country: string | null;
+  codec: string | null;
+  bitrate: number;
+}
+
 export interface EngineStatus {
   mode: "library" | "lineIn";
   source: string | null;
