@@ -1349,7 +1349,8 @@ button svg,
 }
 
 .radio-play,
-.radio-add {
+.radio-add,
+.radio-fav {
   flex-shrink: 0;
   width: 30px;
   height: 30px;
@@ -1361,6 +1362,44 @@ button svg,
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.radio-fav {
+  color: var(--text-dim);
+}
+
+.radio-fav:hover {
+  color: #f5c451;
+  border-color: #f5c451;
+}
+
+.radio-fav.on {
+  color: #f5c451;
+  border-color: #f5c451;
+}
+
+.fav-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.fav-toggle:hover {
+  border-color: #f5c451;
+}
+
+.fav-toggle.active {
+  background: rgba(245, 196, 81, 0.16);
+  color: #f5c451;
+  border-color: #f5c451;
 }
 
 .radio-play:hover {
