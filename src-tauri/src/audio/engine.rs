@@ -11,8 +11,9 @@ use rubato::{FftFixedIn, Resampler};
 use serde::Serialize;
 
 use crate::audio::decode::AudioFileDecoder;
-use crate::audio::input::{self, LineInSession, RecCmd, RecordingStats};
+use crate::audio::input::{self, LineInSession, RecCmd};
 use crate::audio::riaa::DspParams;
+use crate::audio::sinks::{RecordFormat, RecordingStats};
 use crate::error::{AppError, AppResult};
 use crate::library::model::{Capability, Track};
 use crate::state::lock_unpoisoned;
@@ -174,6 +175,7 @@ enum Cmd {
     },
     StartRecording {
         path: std::path::PathBuf,
+        format: RecordFormat,
         reply: mpsc::Sender<Result<(), String>>,
     },
     StopRecording {
@@ -297,9 +299,13 @@ impl EngineHandle {
             .store(params.treble_db.clamp(-12.0, 12.0).to_bits(), Ordering::Relaxed);
     }
 
-    pub fn start_recording(&self, path: std::path::PathBuf) -> AppResult<()> {
+    pub fn start_recording(&self, path: std::path::PathBuf, format: RecordFormat) -> AppResult<()> {
         let (reply, rx) = mpsc::channel();
-        self.send(Cmd::StartRecording { path, reply })?;
+        self.send(Cmd::StartRecording {
+            path,
+            format,
+            reply,
+        })?;
         Self::wait(rx)
     }
 
@@ -563,7 +569,11 @@ impl AudioHost {
                     }
                 }
             }
-            Cmd::StartRecording { path, reply } => {
+            Cmd::StartRecording {
+                path,
+                format,
+                reply,
+            } => {
                 let Some(session) = self.line_in.as_ref() else {
                     let _ = reply.send(Err("select a line-in source before recording".into()));
                     return;
@@ -577,7 +587,14 @@ impl AudioHost {
                     return;
                 };
                 let (rtx, rrx) = mpsc::channel();
-                if tx.send(RecCmd::Start { path, reply: rtx }).is_err() {
+                if tx
+                    .send(RecCmd::Start {
+                        path,
+                        format,
+                        reply: rtx,
+                    })
+                    .is_err()
+                {
                     let _ = reply.send(Err("recorder thread is not running".into()));
                     return;
                 }
@@ -1120,7 +1137,12 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("temp dir");
         let wav = dir.join("capture.wav");
         engine
-            .start_recording(wav.clone())
+            .start_recording(
+                wav.clone(),
+                crate::audio::sinks::RecordFormat::Wav {
+                    bits: crate::audio::sinks::PcmBits::F32,
+                },
+            )
             .expect("start recording");
         std::thread::sleep(Duration::from_millis(1000));
         assert!(engine.status().recording);

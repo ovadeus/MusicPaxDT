@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -5,6 +6,7 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::audio::engine::{self, AudioDeviceInfo, EngineStatus, NowPlaying};
 use crate::audio::input;
+use crate::audio::sinks::RecordFormat;
 use crate::error::{AppError, AppResult};
 use crate::library::model::{Capability, ImportResult, NewTrack, Track};
 use crate::library::{db, scan};
@@ -247,17 +249,31 @@ pub fn engine_status(state: State<'_, AppState>) -> EngineStatus {
     state.engine.status()
 }
 
-/// Start recording the live line-in source to a float32 WAV in the app's
-/// recordings folder. Returns the file path.
+/// Resolve the recording format from persisted settings (defaults: WAV,
+/// float32, MP3 320 kbps when MP3 is selected).
+fn recording_format(conn: &rusqlite::Connection) -> AppResult<RecordFormat> {
+    let format = db::get_setting(conn, "recording.format")?.unwrap_or_else(|| "wav".into());
+    let bit_depth = db::get_setting(conn, "recording.bit_depth")?.unwrap_or_else(|| "32".into());
+    let mp3_kbps = db::get_setting(conn, "recording.mp3_bitrate")?.unwrap_or_else(|| "320".into());
+    Ok(RecordFormat::from_settings(&format, &bit_depth, &mp3_kbps))
+}
+
+/// Start recording the live line-in source into the app's recordings folder
+/// using the format configured in Settings. Returns the file path.
 #[tauri::command]
 pub async fn start_recording(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> AppResult<String> {
     let engine = state.engine.clone();
+    let db = state.db.clone();
     let info = engine
         .line_in_info()
         .ok_or_else(|| AppError::Audio("select a line-in source before recording".into()))?;
+    let format = {
+        let conn = lock_unpoisoned(&db);
+        recording_format(&conn)?
+    };
     let dir = app
         .path()
         .app_data_dir()
@@ -265,15 +281,54 @@ pub async fn start_recording(
         .join("recordings");
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(format!(
-        "{} {}.wav",
+        "{} {}.{}",
         source_label(&info.source),
-        local_timestamp()
+        local_timestamp(),
+        format.extension()
     ));
     let display = path.to_string_lossy().into_owned();
-    tauri::async_runtime::spawn_blocking(move || engine.start_recording(path))
+    tauri::async_runtime::spawn_blocking(move || engine.start_recording(path, format))
         .await
         .map_err(|e| AppError::Audio(format!("recording task failed: {e}")))??;
     Ok(display)
+}
+
+// ---------------------------------------------------------------------------
+// Settings: generic key-value store backing the Settings UI.
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn get_settings(state: State<'_, AppState>) -> AppResult<HashMap<String, String>> {
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = lock_unpoisoned(&db);
+        Ok(db::get_all_settings(&conn)?.into_iter().collect())
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("settings task failed: {e}")))?
+}
+
+#[tauri::command]
+pub async fn set_setting(
+    key: String,
+    value: String,
+    state: State<'_, AppState>,
+) -> AppResult<()> {
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = lock_unpoisoned(&db);
+        db::set_setting(&conn, &key, &value)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("settings task failed: {e}")))?
+}
+
+/// Human-readable summary of the active recording format (for the receiver
+/// panel chip).
+#[tauri::command]
+pub fn recording_format_label(state: State<'_, AppState>) -> AppResult<String> {
+    let conn = lock_unpoisoned(&state.db);
+    Ok(recording_format(&conn)?.label())
 }
 
 /// Stop the recording, finalize the WAV, and add it to the library as an

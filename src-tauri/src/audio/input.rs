@@ -4,8 +4,6 @@
 //! native rate, post-DSP and pre-volume — you archive the corrected signal,
 //! not the monitor level.
 
-use std::fs::File;
-use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::{mpsc, Arc};
@@ -16,95 +14,12 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SizedSample, Stream};
 use rtrb::{Consumer, Producer, RingBuffer};
 use rubato::{FftFixedIn, Resampler};
-use serde::Serialize;
 
 use crate::audio::engine::Shared;
 use crate::audio::riaa::{DspChain, DspParams};
+use crate::audio::sinks::{create_sink, RecordFormat, RecordSink, RecordingStats};
 
 const RESAMPLE_CHUNK: usize = 1024;
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RecordingStats {
-    pub path: String,
-    pub frames: u64,
-    pub sample_rate: u32,
-    pub duration_ms: u64,
-}
-
-// ---------------------------------------------------------------------------
-// Float32 stereo WAV writer (header patched on finalize).
-// ---------------------------------------------------------------------------
-
-pub struct WavWriter {
-    file: BufWriter<File>,
-    sample_rate: u32,
-    frames: u64,
-    path: PathBuf,
-}
-
-impl WavWriter {
-    pub fn create(path: PathBuf, sample_rate: u32) -> std::io::Result<Self> {
-        let mut file = BufWriter::new(File::create(&path)?);
-        let byte_rate = sample_rate * 2 * 4;
-        let mut header = Vec::with_capacity(56);
-        header.extend_from_slice(b"RIFF");
-        header.extend_from_slice(&0u32.to_le_bytes()); // patched on finalize
-        header.extend_from_slice(b"WAVE");
-        header.extend_from_slice(b"fmt ");
-        header.extend_from_slice(&16u32.to_le_bytes());
-        header.extend_from_slice(&3u16.to_le_bytes()); // IEEE float
-        header.extend_from_slice(&2u16.to_le_bytes()); // stereo
-        header.extend_from_slice(&sample_rate.to_le_bytes());
-        header.extend_from_slice(&byte_rate.to_le_bytes());
-        header.extend_from_slice(&8u16.to_le_bytes()); // block align
-        header.extend_from_slice(&32u16.to_le_bytes());
-        header.extend_from_slice(b"fact");
-        header.extend_from_slice(&4u32.to_le_bytes());
-        header.extend_from_slice(&0u32.to_le_bytes()); // patched on finalize
-        header.extend_from_slice(b"data");
-        header.extend_from_slice(&0u32.to_le_bytes()); // patched on finalize
-        file.write_all(&header)?;
-        Ok(Self {
-            file,
-            sample_rate,
-            frames: 0,
-            path,
-        })
-    }
-
-    /// Write interleaved stereo samples.
-    pub fn write_samples(&mut self, interleaved: &[f32]) -> std::io::Result<()> {
-        for s in interleaved {
-            self.file.write_all(&s.to_le_bytes())?;
-        }
-        self.frames += interleaved.len() as u64 / 2;
-        Ok(())
-    }
-
-    pub fn frames(&self) -> u64 {
-        self.frames
-    }
-
-    pub fn finalize(mut self) -> std::io::Result<RecordingStats> {
-        let data_len = (self.frames * 8) as u32;
-        self.file.flush()?;
-        let file = self.file.get_mut();
-        file.seek(SeekFrom::Start(4))?;
-        file.write_all(&(48 + data_len).to_le_bytes())?;
-        file.seek(SeekFrom::Start(44))?;
-        file.write_all(&(self.frames as u32).to_le_bytes())?;
-        file.seek(SeekFrom::Start(52))?;
-        file.write_all(&data_len.to_le_bytes())?;
-        file.flush()?;
-        Ok(RecordingStats {
-            path: self.path.to_string_lossy().into_owned(),
-            frames: self.frames,
-            sample_rate: self.sample_rate,
-            duration_ms: self.frames * 1000 / self.sample_rate.max(1) as u64,
-        })
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Recorder thread: drains the record ring to disk between Start/Stop commands.
@@ -113,6 +28,7 @@ impl WavWriter {
 pub enum RecCmd {
     Start {
         path: PathBuf,
+        format: RecordFormat,
         reply: mpsc::Sender<Result<(), String>>,
     },
     Stop {
@@ -126,7 +42,7 @@ fn recorder_loop(
     sample_rate: u32,
     shared: Arc<Shared>,
 ) {
-    let mut writer: Option<WavWriter> = None;
+    let mut writer: Option<Box<dyn RecordSink>> = None;
     let mut buf = vec![0f32; 8192];
     loop {
         // Drain whatever the relay has teed off. When idle, discard so the
@@ -156,7 +72,11 @@ fn recorder_loop(
         }
 
         match rx.try_recv() {
-            Ok(RecCmd::Start { path, reply }) => match WavWriter::create(path, sample_rate) {
+            Ok(RecCmd::Start {
+                path,
+                format,
+                reply,
+            }) => match create_sink(format, path, sample_rate) {
                 Ok(w) => {
                     shared.rec_frames.store(0, Ordering::Relaxed);
                     writer = Some(w);
@@ -522,51 +442,4 @@ pub fn list_input_devices() -> Result<Vec<crate::audio::engine::AudioDeviceInfo>
         }
     }
     Ok(devices)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// WAV writer round-trip: write a sine, finalize, decode with the
-    /// project's own symphonia decoder, confirm length and content survive.
-    #[test]
-    fn wav_writer_roundtrip_through_decoder() {
-        let dir = std::env::temp_dir().join(format!("stack-wav-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("temp dir");
-        let path = dir.join("tee.wav");
-
-        let rate = 48_000u32;
-        let mut writer = WavWriter::create(path.clone(), rate).expect("create wav");
-        let n = rate as usize; // 1 second
-        let mut samples = Vec::with_capacity(n * 2);
-        for i in 0..n {
-            let v = (2.0 * std::f32::consts::PI * 440.0 * i as f32 / rate as f32).sin() * 0.5;
-            samples.push(v);
-            samples.push(-v);
-        }
-        writer.write_samples(&samples).expect("write");
-        let stats = writer.finalize().expect("finalize");
-        assert_eq!(stats.frames, n as u64);
-        assert_eq!(stats.duration_ms, 1000);
-
-        let mut dec =
-            crate::audio::decode::AudioFileDecoder::open(&path).expect("decode own wav");
-        assert_eq!(dec.sample_rate, rate);
-        let mut total = 0usize;
-        let mut max_amp = 0f32;
-        while let Ok(Some(chunk)) = dec.next_stereo() {
-            total += chunk.len() / 2;
-            for s in chunk {
-                max_amp = max_amp.max(s.abs());
-            }
-        }
-        assert_eq!(total, n, "all frames must survive the round trip");
-        assert!(
-            (max_amp - 0.5).abs() < 0.01,
-            "amplitude must survive, got {max_amp}"
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
 }

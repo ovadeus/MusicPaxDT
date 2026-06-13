@@ -200,6 +200,16 @@ pub fn open_in_memory_for_tests(conn: &Connection) {
     migrate(conn).expect("test migration failed");
 }
 
+pub fn get_all_settings(conn: &Connection) -> AppResult<Vec<(String, String)>> {
+    let mut stmt = conn.prepare("SELECT key, value FROM settings")?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    let mut settings = Vec::new();
+    for row in rows {
+        settings.push(row?);
+    }
+    Ok(settings)
+}
+
 pub fn get_setting(conn: &Connection, key: &str) -> AppResult<Option<String>> {
     Ok(conn
         .query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| {

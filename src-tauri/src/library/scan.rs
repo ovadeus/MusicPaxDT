@@ -12,7 +12,9 @@ use crate::library::model::{ImportResult, NewTrack};
 use crate::sources::local::LocalFilesAdapter;
 use crate::sources::SourceAdapter;
 
-const AUDIO_EXTENSIONS: &[&str] = &["mp3", "flac", "wav", "ogg", "oga", "m4a", "aac", "mp4"];
+const AUDIO_EXTENSIONS: &[&str] = &[
+    "mp3", "flac", "wav", "ogg", "oga", "m4a", "aac", "mp4", "aif", "aiff",
+];
 
 fn is_audio_file(path: &Path) -> bool {
     path.extension()

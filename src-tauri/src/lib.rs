@@ -46,6 +46,9 @@ pub fn run() {
             commands::engine_status,
             commands::start_recording,
             commands::stop_recording,
+            commands::get_settings,
+            commands::set_setting,
+            commands::recording_format_label,
         ])
         .build(tauri::generate_context!());
 
