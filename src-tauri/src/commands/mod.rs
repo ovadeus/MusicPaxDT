@@ -80,6 +80,37 @@ pub async fn list_tracks(
     .map_err(|e| AppError::Other(format!("query task failed: {e}")))?
 }
 
+/// Read a local image file and return it as a `data:` URL. Used for custom
+/// thumbnails (the UI is served over http://localhost, so file:// paths won't
+/// load; an embedded data URL works everywhere). Capped at 2 MB.
+#[tauri::command]
+pub async fn read_image_data_url(path: String) -> AppResult<String> {
+    use base64::Engine;
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes = std::fs::read(&path)?;
+        if bytes.len() > 2_000_000 {
+            return Err(AppError::Other("image too large (max 2 MB)".into()));
+        }
+        let mime = match PathBuf::from(&path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("png") => "image/png",
+            Some("jpg") | Some("jpeg") => "image/jpeg",
+            Some("gif") => "image/gif",
+            Some("webp") => "image/webp",
+            Some("svg") => "image/svg+xml",
+            _ => "application/octet-stream",
+        };
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        Ok(format!("data:{mime};base64,{b64}"))
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("image task failed: {e}")))?
+}
+
 /// Edit a track's title/artist/album/year/genre. Updates the library row and,
 /// for OWNED local files, writes the tags back to the file (best-effort, so a
 /// read-only or unsupported file still updates the library).

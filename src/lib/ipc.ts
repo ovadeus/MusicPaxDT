@@ -60,6 +60,10 @@ export function deleteTrack(trackId: number): Promise<void> {
   return invoke<void>("delete_track", { trackId });
 }
 
+export function readImageDataUrl(path: string): Promise<string> {
+  return invoke<string>("read_image_data_url", { path });
+}
+
 export function getAudioDevices(): Promise<AudioDevice[]> {
   return invoke<AudioDevice[]>("get_audio_devices");
 }

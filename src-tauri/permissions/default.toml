@@ -11,6 +11,7 @@ commands.allow = [
     "list_tracks",
     "update_track_metadata",
     "delete_track",
+    "read_image_data_url",
     "get_audio_devices",
     "set_output_device",
     "load_track",

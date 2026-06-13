@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link2, Play, Plus, Radio as RadioIcon, Star } from "lucide-react";
+import { open } from "@tauri-apps/plugin-dialog";
+import { ImagePlus, Link2, Pencil, Play, Plus, Radio as RadioIcon, Star, X } from "lucide-react";
 import * as ipc from "../lib/ipc";
 import type { RadioStation } from "../lib/types";
 
@@ -32,6 +33,9 @@ export default function RadioPanel({
   const [adding, setAdding] = useState(false);
   const [customUrl, setCustomUrl] = useState("");
   const [resolving, setResolving] = useState(false);
+  const [editing, setEditing] = useState<RadioStation | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editThumb, setEditThumb] = useState("");
   const debounce = useRef<number | undefined>(undefined);
 
   // Load persisted favorites once.
@@ -79,6 +83,37 @@ export default function RadioPanel({
   const toggleFav = (s: RadioStation) => {
     if (isFav(s)) persist(favorites.filter((f) => f.url !== s.url));
     else persist([...favorites, s]);
+  };
+
+  const openEditor = (s: RadioStation) => {
+    setEditing(s);
+    setEditName(s.name);
+    setEditThumb(s.favicon ?? "");
+  };
+
+  const chooseImage = async () => {
+    try {
+      const file = await open({
+        multiple: false,
+        filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp"] }],
+      });
+      if (typeof file === "string") setEditThumb(await ipc.readImageDataUrl(file));
+    } catch (e) {
+      onError(`${e}`);
+    }
+  };
+
+  const saveEdit = () => {
+    if (!editing) return;
+    const name = editName.trim() || editing.name;
+    const favicon = editThumb.trim() || null;
+    // Edit the favorite (identity = url); auto-favorite if it wasn't saved yet.
+    const exists = favUrls.has(editing.url);
+    const next = exists
+      ? favorites.map((f) => (f.url === editing.url ? { ...f, name, favicon } : f))
+      : [...favorites, { ...editing, name, favicon }];
+    persist(next);
+    setEditing(null);
   };
 
   const add = async (s: RadioStation) => {
@@ -214,6 +249,13 @@ export default function RadioPanel({
                 </div>
               </div>
               <button
+                className="radio-fav"
+                title="Rename / set thumbnail"
+                onClick={() => openEditor(s)}
+              >
+                <Pencil size={13} />
+              </button>
+              <button
                 className={`radio-fav${fav ? " on" : ""}`}
                 title={fav ? "Remove from favorites" : "Add to favorites"}
                 onClick={() => toggleFav(s)}
@@ -232,6 +274,65 @@ export default function RadioPanel({
           );
         })}
       </div>
+
+      {editing && (
+        <div className="settings-overlay" onClick={() => setEditing(null)}>
+          <div className="settings-panel edit-panel" onClick={(e) => e.stopPropagation()}>
+            <div className="settings-header">
+              <h2>Edit station</h2>
+              <button className="settings-close" onClick={() => setEditing(null)} title="Close">
+                <X size={15} />
+              </button>
+            </div>
+
+            <label className="edit-field">
+              <span>Name</span>
+              <input
+                autoFocus
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && saveEdit()}
+              />
+            </label>
+
+            <label className="edit-field">
+              <span>Thumbnail image URL</span>
+              <input
+                value={editThumb}
+                placeholder="https://…/logo.png  (or choose a file →)"
+                onChange={(e) => setEditThumb(e.target.value)}
+              />
+            </label>
+
+            <div className="edit-thumb-row">
+              <div className="edit-thumb-preview">
+                {editThumb ? (
+                  <img src={editThumb} alt="" onError={(e) => (e.currentTarget.style.opacity = "0.2")} />
+                ) : (
+                  <RadioIcon size={22} />
+                )}
+              </div>
+              <button className="addurl-button" onClick={chooseImage}>
+                <ImagePlus size={14} /> Choose image…
+              </button>
+              {editThumb && (
+                <button className="addurl-button" onClick={() => setEditThumb("")}>
+                  Clear
+                </button>
+              )}
+            </div>
+
+            <div className="edit-actions">
+              <button className="import-button" onClick={saveEdit}>
+                Save
+              </button>
+            </div>
+            <p className="settings-hint">
+              Saving keeps this station in Favorites with your name and thumbnail.
+            </p>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
