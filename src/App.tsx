@@ -4,6 +4,7 @@ import LibraryTable from "./components/LibraryTable";
 import Logo from "./components/Logo";
 import NowPlayingBar from "./components/NowPlayingBar";
 import ReceiverPanel from "./components/ReceiverPanel";
+import SettingsPanel from "./components/SettingsPanel";
 import SourceSelector, { type SelectableSource } from "./components/SourceSelector";
 import * as ipc from "./lib/ipc";
 import type {
@@ -36,6 +37,8 @@ export default function App() {
     recording: false,
     recordedMs: 0,
   });
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [formatLabel, setFormatLabel] = useState("");
 
   const showStatus = useCallback((msg: string) => {
     setStatus(msg);
@@ -64,6 +67,11 @@ export default function App() {
       .getAudioDevices()
       .then(setDevices)
       .catch((e) => showStatus(`Audio devices unavailable: ${e}`));
+
+    ipc
+      .recordingFormatLabel()
+      .then(setFormatLabel)
+      .catch(() => setFormatLabel(""));
 
     const subs = [
       ipc.onPosition(setPositionMs),
@@ -178,6 +186,13 @@ export default function App() {
           <button className="import-button" onClick={handleImport} disabled={busy}>
             {busy ? "Importing…" : "Import Folder"}
           </button>
+          <button
+            className="settings-button"
+            onClick={() => setSettingsOpen(true)}
+            title="Settings"
+          >
+            ⚙
+          </button>
         </div>
       </header>
 
@@ -188,6 +203,8 @@ export default function App() {
           source={lineIn}
           status={engineStat}
           recording={recState}
+          formatLabel={formatLabel}
+          onOpenSettings={() => setSettingsOpen(true)}
           onStatus={setEngineStat}
           onError={showStatus}
           onRecordingSaved={(title) => {
@@ -223,6 +240,19 @@ export default function App() {
         onSeek={(ms) => ipc.seek(ms).catch((e) => showStatus(`${e}`))}
         onVolume={handleVolume}
       />
+
+      {settingsOpen && (
+        <SettingsPanel
+          onClose={() => setSettingsOpen(false)}
+          onError={showStatus}
+          onSaved={() => {
+            ipc
+              .recordingFormatLabel()
+              .then(setFormatLabel)
+              .catch(() => {});
+          }}
+        />
+      )}
     </div>
   );
 }

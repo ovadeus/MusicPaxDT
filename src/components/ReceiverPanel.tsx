@@ -12,6 +12,8 @@ interface Props {
   source: LineInSource;
   status: EngineStatus | null;
   recording: RecordingState;
+  formatLabel: string;
+  onOpenSettings: () => void;
   onStatus: (status: EngineStatus) => void;
   onError: (message: string) => void;
   onRecordingSaved: (title: string) => void;
@@ -25,7 +27,16 @@ const SOURCE_TITLES: Record<LineInSource, string> = {
 };
 
 export default function ReceiverPanel(props: Props) {
-  const { source, status, recording, onStatus, onError, onRecordingSaved } = props;
+  const {
+    source,
+    status,
+    recording,
+    formatLabel,
+    onOpenSettings,
+    onStatus,
+    onError,
+    onRecordingSaved,
+  } = props;
   const [inputs, setInputs] = useState<AudioDevice[]>([]);
   const [busy, setBusy] = useState(false);
 
@@ -158,6 +169,15 @@ export default function ReceiverPanel(props: Props) {
           </button>
           {recording.recording && (
             <span className="record-elapsed">{formatDuration(recording.recordedMs)}</span>
+          )}
+          {formatLabel && (
+            <button
+              className="format-chip"
+              onClick={onOpenSettings}
+              title="Recording format — click to change in Settings"
+            >
+              {formatLabel}
+            </button>
           )}
         </div>
       </div>

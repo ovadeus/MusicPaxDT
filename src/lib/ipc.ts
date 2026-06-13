@@ -113,6 +113,20 @@ export function stopRecording(): Promise<Track> {
   return invoke<Track>("stop_recording");
 }
 
+// --- settings -------------------------------------------------------------
+
+export function getSettings(): Promise<Record<string, string>> {
+  return invoke<Record<string, string>>("get_settings");
+}
+
+export function setSetting(key: string, value: string): Promise<void> {
+  return invoke<void>("set_setting", { key, value });
+}
+
+export function recordingFormatLabel(): Promise<string> {
+  return invoke<string>("recording_format_label");
+}
+
 // --- engine events -------------------------------------------------------
 
 export function onRecordingState(
