@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import {
   Disc3,
   Flag,
@@ -56,14 +57,37 @@ export function capabilityIcon(t: Track): {
   }
 }
 
-const COLUMNS: { field: SortField; label: string }[] = [
-  { field: "title", label: "Title" },
-  { field: "artist", label: "Artist" },
-  { field: "album", label: "Album" },
-  { field: "genre", label: "Genre" },
-  { field: "year", label: "Year" },
-  { field: "duration_ms", label: "Length" },
+interface Column {
+  field: SortField;
+  label: string;
+  cell: (t: Track) => string;
+  num?: boolean;
+  /// Hidden first when the table gets narrow.
+  hideWhenNarrow?: boolean;
+}
+
+const COLUMNS: Column[] = [
+  { field: "title", label: "Title", cell: (t) => t.title ?? "—" },
+  { field: "artist", label: "Artist", cell: (t) => t.artist ?? "—" },
+  { field: "album", label: "Album", cell: (t) => t.album ?? "—", hideWhenNarrow: true },
+  { field: "genre", label: "Genre", cell: (t) => t.genre ?? "—", hideWhenNarrow: true },
+  {
+    field: "year",
+    label: "Year",
+    cell: (t) => (t.year != null ? String(t.year) : "—"),
+    hideWhenNarrow: true,
+  },
+  {
+    field: "duration_ms",
+    label: "Length",
+    cell: (t) => formatDuration(t.durationMs),
+    num: true,
+  },
 ];
+
+// Below this content width, drop Album/Genre/Year to keep Title/Artist/Length
+// readable (e.g. when the Now Playing panel is open on a small window).
+const COMPACT_WIDTH = 620;
 
 export function formatDuration(ms: number | null): string {
   if (ms == null || ms < 0) return "–:––";
@@ -92,6 +116,21 @@ export default function LibraryTable(props: Props) {
     onAddToPlaylist,
   } = props;
 
+  // Hide secondary columns when the table is narrow.
+  const sectionRef = useRef<HTMLElement | null>(null);
+  const [compact, setCompact] = useState(false);
+  useEffect(() => {
+    const el = sectionRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => {
+      setCompact(entry.contentRect.width < COMPACT_WIDTH);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const columns = compact ? COLUMNS.filter((c) => !c.hideWhenNarrow) : COLUMNS;
+
   const toggleSort = (field: SortField) => {
     if (sort.field === field) {
       onSortChange({ field, dir: sort.dir === "asc" ? "desc" : "asc" });
@@ -104,7 +143,7 @@ export default function LibraryTable(props: Props) {
     sort.field === field ? (sort.dir === "asc" ? " ▲" : " ▼") : "";
 
   return (
-    <section className="library">
+    <section className="library" ref={sectionRef}>
       <div className="library-toolbar">
         {heading && <h2 className="library-heading">{heading}</h2>}
         {searchable && (
@@ -127,8 +166,12 @@ export default function LibraryTable(props: Props) {
               <th className="cap-col" title="Capability">
                 <Flag size={12} />
               </th>
-              {COLUMNS.map((c) => (
-                <th key={c.field} onClick={() => toggleSort(c.field)}>
+              {columns.map((c) => (
+                <th
+                  key={c.field}
+                  className={c.num ? "num" : undefined}
+                  onClick={() => toggleSort(c.field)}
+                >
                   {c.label}
                   {arrow(c.field)}
                 </th>
@@ -139,7 +182,7 @@ export default function LibraryTable(props: Props) {
           <tbody>
             {tracks.length === 0 ? (
               <tr>
-                <td className="empty-row" colSpan={COLUMNS.length + 1 + (curator ? 1 : 0)}>
+                <td className="empty-row" colSpan={columns.length + 1 + (curator ? 1 : 0)}>
                   {heading
                     ? "This playlist is empty — add tracks with the + button."
                     : "Library is empty — use “Import Folder” or “Add URL” to add music."}
@@ -159,12 +202,11 @@ export default function LibraryTable(props: Props) {
                         <cap.Icon size={15} />
                       </span>
                     </td>
-                    <td>{t.title ?? "—"}</td>
-                    <td>{t.artist ?? "—"}</td>
-                    <td>{t.album ?? "—"}</td>
-                    <td>{t.genre ?? "—"}</td>
-                    <td>{t.year ?? "—"}</td>
-                    <td className="num">{formatDuration(t.durationMs)}</td>
+                    {columns.map((c) => (
+                      <td key={c.field} className={c.num ? "num" : undefined}>
+                        {c.cell(t)}
+                      </td>
+                    ))}
                     {curator && (
                     <td className="add-col">
                       <div className="row-actions">

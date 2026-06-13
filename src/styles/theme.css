@@ -154,6 +154,7 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
 }
 
 .library-toolbar {
@@ -573,6 +574,7 @@ button svg,
 
 .now-playing-panel {
   width: 320px;
+  min-width: 300px;
   flex-shrink: 0;
   border-left: 1px solid var(--border);
   background: var(--bg-raised);
@@ -612,11 +614,11 @@ button svg,
 
 .np-reopen {
   flex-shrink: 0;
-  width: 22px;
+  width: 24px;
   border: none;
   border-left: 1px solid var(--border);
   background: var(--bg-raised);
-  color: var(--text-dim);
+  color: var(--accent);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -752,6 +754,7 @@ button svg,
   flex: 1;
   display: flex;
   min-height: 0;
+  min-width: 0;
 }
 
 .playlist-sidebar {
