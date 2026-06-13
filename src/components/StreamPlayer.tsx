@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, ExternalLink, RadioTower, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, ExternalLink, SquarePlay, X } from "lucide-react";
 import type { Track } from "../lib/types";
 
 interface Props {
@@ -125,13 +125,13 @@ export default function StreamPlayer(props: Props) {
           title={`Show player — ${track.title ?? "stream"}`}
         >
           <ChevronLeft size={16} className="stream-dock-chevron" />
-          <RadioTower size={14} className="stream-dock-icon" />
+          <SquarePlay size={14} className="stream-dock-icon" />
         </button>
       )}
       <div className={`stream-player${docked ? " docked" : ""}`}>
       <div className="stream-player-header">
         <span className="stream-player-title" title={track.title ?? ""}>
-          <RadioTower size={13} className="np-stream-icon" />
+          <SquarePlay size={13} className="np-stream-icon" />
           {track.title ?? "Stream"}
         </span>
         <button

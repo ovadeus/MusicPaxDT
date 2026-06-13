@@ -1,5 +1,5 @@
-import { Disc3, Flag, Link as LinkIcon, RadioTower } from "lucide-react";
-import type { Capability, PlaylistInfo, SortField, SortSpec, Track } from "../lib/types";
+import { Disc3, Flag, Link as LinkIcon, Pencil, RadioTower, SquarePlay } from "lucide-react";
+import type { PlaylistInfo, SortField, SortSpec, Track } from "../lib/types";
 
 interface Props {
   tracks: Track[];
@@ -10,31 +10,40 @@ interface Props {
   sort: SortSpec;
   onSortChange: (s: SortSpec) => void;
   onActivate: (track: Track) => void;
+  onEdit: (track: Track) => void;
   nowPlayingId: number | null;
   playlists: PlaylistInfo[];
   onAddToPlaylist: (playlistId: number, trackId: number) => void;
 }
 
-const CAPABILITY_ICONS: Record<
-  Capability,
-  { Icon: typeof Disc3; label: string; className: string }
-> = {
-  OWNED: {
-    Icon: Disc3,
-    label: "OWNED — local audio, can decode, mix and record",
-    className: "cap-owned",
-  },
-  STREAM_PLAYABLE: {
-    Icon: RadioTower,
-    label: "STREAM PLAYABLE — plays inline only, no DSP or recording",
-    className: "cap-stream",
-  },
-  LINK_ONLY: {
-    Icon: LinkIcon,
-    label: "LINK ONLY — opens externally",
-    className: "cap-link",
-  },
-};
+/// Icon per capability, refined by source (YouTube streams get the YouTube
+/// glyph; RadioTower stays for radio streams arriving in M3).
+export function capabilityIcon(t: Track): {
+  Icon: typeof Disc3;
+  label: string;
+  className: string;
+} {
+  switch (t.capability) {
+    case "OWNED":
+      return {
+        Icon: Disc3,
+        label: "OWNED — local audio, can decode, mix and record",
+        className: "cap-owned",
+      };
+    case "STREAM_PLAYABLE":
+      return {
+        Icon: t.sourceKind === "youtube" ? SquarePlay : RadioTower,
+        label: "STREAM PLAYABLE — plays inline only, no DSP or recording",
+        className: t.sourceKind === "youtube" ? "cap-youtube" : "cap-stream",
+      };
+    default:
+      return {
+        Icon: LinkIcon,
+        label: "LINK ONLY — opens externally",
+        className: "cap-link",
+      };
+  }
+}
 
 const COLUMNS: { field: SortField; label: string }[] = [
   { field: "title", label: "Title" },
@@ -63,6 +72,7 @@ export default function LibraryTable(props: Props) {
     sort,
     onSortChange,
     onActivate,
+    onEdit,
     nowPlayingId,
     playlists,
     onAddToPlaylist,
@@ -123,7 +133,7 @@ export default function LibraryTable(props: Props) {
               </tr>
             ) : (
               tracks.map((t) => {
-                const cap = CAPABILITY_ICONS[t.capability];
+                const cap = capabilityIcon(t);
                 return (
                   <tr
                     key={t.id}
@@ -142,26 +152,38 @@ export default function LibraryTable(props: Props) {
                     <td>{t.year ?? "—"}</td>
                     <td className="num">{formatDuration(t.durationMs)}</td>
                     <td className="add-col">
-                      {playlists.length > 0 && (
-                        <select
-                          className="add-to-playlist"
-                          title="Add to playlist"
-                          value=""
-                          onClick={(e) => e.stopPropagation()}
-                          onChange={(e) => {
-                            const id = Number(e.target.value);
-                            if (id) onAddToPlaylist(id, t.id);
-                            e.target.value = "";
+                      <div className="row-actions">
+                        <button
+                          className="row-edit"
+                          title="Edit title & tags"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onEdit(t);
                           }}
                         >
-                          <option value="">+</option>
-                          {playlists.map((p) => (
-                            <option key={p.id} value={p.id}>
-                              {p.name}
-                            </option>
-                          ))}
-                        </select>
-                      )}
+                          <Pencil size={13} />
+                        </button>
+                        {playlists.length > 0 && (
+                          <select
+                            className="add-to-playlist"
+                            title="Add to playlist"
+                            value=""
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) => {
+                              const id = Number(e.target.value);
+                              if (id) onAddToPlaylist(id, t.id);
+                              e.target.value = "";
+                            }}
+                          >
+                            <option value="">+</option>
+                            {playlists.map((p) => (
+                              <option key={p.id} value={p.id}>
+                                {p.name}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );

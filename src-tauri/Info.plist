@@ -3,6 +3,6 @@
 <plist version="1.0">
 <dict>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>STACK captures audio input to monitor and record your line-in sources (turntable, tape, CD, aux).</string>
+	<string>MUSICPAX captures audio input to monitor and record your line-in sources (turntable, tape, CD, aux).</string>
 </dict>
 </plist>

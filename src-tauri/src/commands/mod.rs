@@ -79,6 +79,40 @@ pub async fn list_tracks(
     .map_err(|e| AppError::Other(format!("query task failed: {e}")))?
 }
 
+/// Edit a track's title/artist/album/year/genre. Updates the library row and,
+/// for OWNED local files, writes the tags back to the file (best-effort, so a
+/// read-only or unsupported file still updates the library).
+#[tauri::command]
+pub async fn update_track_metadata(
+    track_id: i64,
+    title: Option<String>,
+    artist: Option<String>,
+    album: Option<String>,
+    year: Option<i64>,
+    genre: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<Track> {
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let edit = db::TrackEdit {
+            title,
+            artist,
+            album,
+            year,
+            genre,
+        };
+        let conn = lock_unpoisoned(&db);
+        let track = db::update_track_metadata(&conn, track_id, &edit)?;
+        // Persist to the file itself for owned local audio.
+        if track.capability == Capability::Owned && track.source_kind == "local" {
+            scan::write_tags(&track);
+        }
+        Ok(track)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("metadata task failed: {e}")))?
+}
+
 #[tauri::command]
 pub async fn get_audio_devices() -> AppResult<Vec<AudioDeviceInfo>> {
     tauri::async_runtime::spawn_blocking(engine::list_devices)

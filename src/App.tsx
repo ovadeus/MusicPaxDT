@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Settings as SettingsIcon } from "lucide-react";
 import AddUrlModal from "./components/AddUrlModal";
+import TrackEditModal from "./components/TrackEditModal";
 import LibraryTable from "./components/LibraryTable";
 import Logo from "./components/Logo";
 import NowPlayingBar from "./components/NowPlayingBar";
@@ -46,6 +47,7 @@ export default function App() {
   });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [addUrlOpen, setAddUrlOpen] = useState(false);
+  const [editTrack, setEditTrack] = useState<Track | null>(null);
   const [formatLabel, setFormatLabel] = useState("");
   const [stream, setStream] = useState<Track | null>(null);
   const [streamPlaying, setStreamPlaying] = useState(true);
@@ -347,6 +349,7 @@ export default function App() {
             sort={sort}
             onSortChange={setSort}
             onActivate={playTrack}
+            onEdit={setEditTrack}
             nowPlayingId={
               stream ? stream.id : playState === "stopped" ? null : (now?.track.id ?? null)
             }
@@ -432,6 +435,23 @@ export default function App() {
             showStatus(msg);
             refreshPlaylists();
             refreshTracks();
+          }}
+        />
+      )}
+
+      {editTrack && (
+        <TrackEditModal
+          track={editTrack}
+          onClose={() => setEditTrack(null)}
+          onError={showStatus}
+          onSaved={(updated) => {
+            showStatus(`Updated “${updated.title ?? "track"}”`);
+            refreshTracks();
+            // keep the docked stream label fresh if we just edited it
+            setStream((cur) => (cur && cur.id === updated.id ? updated : cur));
+            setNow((cur) =>
+              cur && cur.track.id === updated.id ? { ...cur, track: updated } : cur,
+            );
           }}
         />
       )}

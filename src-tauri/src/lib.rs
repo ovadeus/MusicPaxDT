@@ -42,7 +42,7 @@ pub fn run() {
                 tauri::WebviewUrl::External(format!("http://localhost:{port}").parse()?)
             };
             tauri::WebviewWindowBuilder::new(app, "main", url)
-                .title("STACK")
+                .title("MUSICPAX")
                 .inner_size(1280.0, 800.0)
                 .min_inner_size(960.0, 600.0)
                 .build()?;
@@ -51,6 +51,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::import_folder,
             commands::list_tracks,
+            commands::update_track_metadata,
             commands::get_audio_devices,
             commands::set_output_device,
             commands::load_track,

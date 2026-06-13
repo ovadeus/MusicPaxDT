@@ -119,6 +119,38 @@ pub fn get_track(conn: &Connection, id: i64) -> AppResult<Track> {
         .ok_or(AppError::TrackNotFound(id))
 }
 
+/// User-editable metadata fields. Empty strings are stored as NULL. The FTS5
+/// triggers keep the search index in sync automatically.
+#[derive(Debug, Clone, Default)]
+pub struct TrackEdit {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub year: Option<i64>,
+    pub genre: Option<String>,
+}
+
+pub fn update_track_metadata(conn: &Connection, id: i64, edit: &TrackEdit) -> AppResult<Track> {
+    let blank_to_null = |s: &Option<String>| -> Option<String> {
+        s.as_ref().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+    };
+    let changed = conn.execute(
+        "UPDATE tracks SET title = ?1, artist = ?2, album = ?3, year = ?4, genre = ?5 WHERE id = ?6",
+        params![
+            blank_to_null(&edit.title),
+            blank_to_null(&edit.artist),
+            blank_to_null(&edit.album),
+            edit.year,
+            blank_to_null(&edit.genre),
+            id
+        ],
+    )?;
+    if changed == 0 {
+        return Err(AppError::TrackNotFound(id));
+    }
+    get_track(conn, id)
+}
+
 const SORTABLE: &[(&str, &str)] = &[
     ("title", "title COLLATE NOCASE"),
     ("artist", "artist COLLATE NOCASE"),
@@ -421,6 +453,41 @@ mod tests {
         assert!(list_playlists(&conn).unwrap().is_empty());
         // tracks survive playlist deletion
         assert_eq!(list_tracks(&conn, None, None, 10, 0).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn metadata_edit_updates_row_and_fts() {
+        let conn = mem_db();
+        insert_track(
+            &conn,
+            &new_track("Sade Greatest Hits Smooth Operator", "Midnight Cassette", "/m/x.mp3"),
+            1,
+        )
+        .unwrap();
+        let id = list_tracks(&conn, None, None, 10, 0).unwrap()[0].id;
+
+        let edit = TrackEdit {
+            title: Some("Smooth Operator".into()),
+            artist: Some("Sade".into()),
+            album: Some("Diamond Life".into()),
+            year: Some(1984),
+            genre: Some("  ".into()), // whitespace → NULL
+        };
+        let updated = update_track_metadata(&conn, id, &edit).unwrap();
+        assert_eq!(updated.title.as_deref(), Some("Smooth Operator"));
+        assert_eq!(updated.artist.as_deref(), Some("Sade"));
+        assert_eq!(updated.album.as_deref(), Some("Diamond Life"));
+        assert_eq!(updated.year, Some(1984));
+        assert_eq!(updated.genre, None, "blank genre stored as NULL");
+
+        // FTS reflects the new title, not the old one.
+        let hit = list_tracks(&conn, Some("smooth operator"), None, 10, 0).unwrap();
+        assert_eq!(hit.len(), 1);
+        let stale = list_tracks(&conn, Some("greatest"), None, 10, 0).unwrap();
+        assert!(stale.is_empty(), "old title must leave the FTS index");
+
+        // Unknown id is an error.
+        assert!(update_track_metadata(&conn, 9999, &edit).is_err());
     }
 
     #[test]

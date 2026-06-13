@@ -9,6 +9,7 @@ description = "Allow the STACK frontend to call all application commands."
 commands.allow = [
     "import_folder",
     "list_tracks",
+    "update_track_metadata",
     "get_audio_devices",
     "set_output_device",
     "load_track",

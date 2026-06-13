@@ -1,4 +1,13 @@
-/* STACK — clean default dark theme. Vintage receiver skins come later. */
+/* MUSICPAX — clean default dark theme. Vintage receiver skins come later. */
+
+/* Kanit Bold (OFL licensed), bundled for offline-first operation. */
+@font-face {
+  font-family: "Kanit";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("../assets/fonts/kanit-700.woff2") format("woff2");
+}
 
 :root {
   --bg: #16181d;
@@ -59,16 +68,11 @@ body {
 }
 
 .brand-word {
-  font-size: 18px;
-  font-weight: 800;
-  letter-spacing: 0.22em;
+  font-family: "Kanit", "Inter", system-ui, sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
   color: #ffffff;
-}
-
-.brand-arrow {
-  height: 20px;
-  width: 20px;
-  fill: #29abe2;
 }
 
 .header-controls {
@@ -249,6 +253,10 @@ body {
 
 .cap-stream {
   color: var(--accent);
+}
+
+.cap-youtube {
+  color: #e8543f;
 }
 
 .cap-link {
@@ -666,8 +674,36 @@ button svg,
 }
 
 .add-col {
-  width: 56px;
+  width: 90px;
   text-align: center;
+}
+
+.row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.row-edit {
+  display: inline-flex;
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  border-radius: 6px;
+  padding: 4px;
+  cursor: pointer;
+  visibility: hidden;
+}
+
+.library-table tbody tr:hover .row-edit {
+  visibility: visible;
+}
+
+.row-edit:hover {
+  color: var(--accent);
+  border-color: var(--border);
 }
 
 .add-to-playlist {
@@ -678,6 +714,44 @@ button svg,
   border-radius: 6px;
   padding: 3px 4px;
   cursor: pointer;
+}
+
+.edit-panel .edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 12px;
+}
+
+.edit-field > span {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-dim);
+}
+
+.edit-field input {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 14px;
+}
+
+.edit-field input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.edit-row {
+  display: flex;
+  gap: 16px;
+}
+
+.edit-row .edit-field {
+  flex: 1;
 }
 
 .addurl-button {

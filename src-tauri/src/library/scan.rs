@@ -1,14 +1,16 @@
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use lofty::config::WriteOptions;
 use lofty::file::TaggedFileExt;
-use lofty::prelude::{Accessor, AudioFile};
+use lofty::prelude::{Accessor, AudioFile, TagExt};
+use lofty::tag::Tag;
 use rusqlite::Connection;
 use walkdir::WalkDir;
 
 use crate::error::AppResult;
 use crate::library::db;
-use crate::library::model::{ImportResult, NewTrack};
+use crate::library::model::{ImportResult, NewTrack, Track};
 use crate::sources::local::LocalFilesAdapter;
 use crate::sources::SourceAdapter;
 
@@ -67,6 +69,60 @@ fn read_track(path: &Path) -> NewTrack {
     }
 
     track
+}
+
+/// Write a track's edited metadata back into the file's tags. Best-effort:
+/// failures (read-only file, unsupported container) are logged, not fatal —
+/// the library row is already updated regardless.
+pub fn write_tags(track: &Track) {
+    let path = Path::new(&track.uri);
+    if let Err(e) = write_tags_inner(track, path) {
+        eprintln!("could not write tags to {}: {e}", path.display());
+    }
+}
+
+fn write_tags_inner(track: &Track, path: &Path) -> Result<(), String> {
+    // Start from the existing primary tag so other fields survive; fall back
+    // to a fresh tag of the file's native type.
+    let tagged = lofty::read_from_path(path).map_err(|e| e.to_string())?;
+    let mut tag = tagged
+        .primary_tag()
+        .cloned()
+        .unwrap_or_else(|| Tag::new(tagged.primary_tag_type()));
+
+    match &track.title {
+        Some(v) => tag.set_title(v.clone()),
+        None => {
+            tag.remove_title();
+        }
+    }
+    match &track.artist {
+        Some(v) => tag.set_artist(v.clone()),
+        None => {
+            tag.remove_artist();
+        }
+    }
+    match &track.album {
+        Some(v) => tag.set_album(v.clone()),
+        None => {
+            tag.remove_album();
+        }
+    }
+    match &track.genre {
+        Some(v) => tag.set_genre(v.clone()),
+        None => {
+            tag.remove_genre();
+        }
+    }
+    match track.year {
+        Some(y) if y > 0 => tag.set_year(y as u32),
+        _ => {
+            tag.remove_year();
+        }
+    }
+
+    tag.save_to_path(path, WriteOptions::default())
+        .map_err(|e| e.to_string())
 }
 
 /// Recursively import every audio file under `root`. Dedupes by uri.

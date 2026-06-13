@@ -38,6 +38,19 @@ export function listTracks(opts: {
   });
 }
 
+export function updateTrackMetadata(
+  trackId: number,
+  fields: {
+    title: string | null;
+    artist: string | null;
+    album: string | null;
+    year: number | null;
+    genre: string | null;
+  },
+): Promise<Track> {
+  return invoke<Track>("update_track_metadata", { trackId, ...fields });
+}
+
 export function getAudioDevices(): Promise<AudioDevice[]> {
   return invoke<AudioDevice[]>("get_audio_devices");
 }
