@@ -1,4 +1,33 @@
 pub mod local;
+pub mod spotify;
+pub mod youtube;
+
+/// What a pasted "Add URL / list" input turned out to be (MusicPax-style
+/// url-detector: classify first, then route to the source module).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DetectedInput {
+    YouTubeVideo(String),
+    SpotifyPlaylist(String),
+    TextList,
+    Unknown,
+}
+
+pub fn detect(input: &str) -> DetectedInput {
+    let trimmed = input.trim();
+    if let Some(id) = youtube::parse_video_id(trimmed) {
+        return DetectedInput::YouTubeVideo(id);
+    }
+    if let Some(id) = spotify::parse_playlist_id(trimmed) {
+        return DetectedInput::SpotifyPlaylist(id);
+    }
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        return DetectedInput::Unknown;
+    }
+    if !trimmed.is_empty() {
+        return DetectedInput::TextList;
+    }
+    DetectedInput::Unknown
+}
 
 use crate::library::model::Capability;
 
