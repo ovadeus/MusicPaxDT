@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Plus, X } from "lucide-react";
 import type { PlaylistInfo } from "../lib/types";
 
 export type LibraryView = { kind: "all" } | { kind: "playlist"; id: number; name: string };
@@ -40,7 +41,7 @@ export default function PlaylistSidebar({ playlists, view, onSelect, onCreate, o
           title="New playlist"
           onClick={() => setCreating(true)}
         >
-          +
+          <Plus size={13} />
         </button>
       </div>
 
@@ -79,7 +80,7 @@ export default function PlaylistSidebar({ playlists, view, onSelect, onCreate, o
               onDelete(p.id);
             }}
           >
-            ✕
+            <X size={11} />
           </button>
         </div>
       ))}

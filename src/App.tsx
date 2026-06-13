@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { Settings as SettingsIcon } from "lucide-react";
 import AddUrlModal from "./components/AddUrlModal";
 import LibraryTable from "./components/LibraryTable";
 import Logo from "./components/Logo";
@@ -292,7 +293,7 @@ export default function App() {
             onClick={() => setSettingsOpen(true)}
             title="Settings"
           >
-            ⚙
+            <SettingsIcon size={16} />
           </button>
         </div>
       </header>

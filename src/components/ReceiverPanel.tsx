@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Circle, Square } from "lucide-react";
 import * as ipc from "../lib/ipc";
 import type {
   AudioDevice,
@@ -165,7 +166,15 @@ export default function ReceiverPanel(props: Props) {
                 : "Record this input to the library (float32 WAV)"
             }
           >
-            {recording.recording ? "■ Stop" : "● Record"}
+            {recording.recording ? (
+              <>
+                <Square size={11} fill="currentColor" /> Stop
+              </>
+            ) : (
+              <>
+                <Circle size={11} fill="currentColor" /> Record
+              </>
+            )}
           </button>
           {recording.recording && (
             <span className="record-elapsed">{formatDuration(recording.recordedMs)}</span>

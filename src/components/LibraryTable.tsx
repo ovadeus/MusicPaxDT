@@ -1,3 +1,4 @@
+import { Disc3, Flag, Link as LinkIcon, RadioTower } from "lucide-react";
 import type { Capability, PlaylistInfo, SortField, SortSpec, Track } from "../lib/types";
 
 interface Props {
@@ -14,13 +15,25 @@ interface Props {
   onAddToPlaylist: (playlistId: number, trackId: number) => void;
 }
 
-const CAPABILITY_ICONS: Record<Capability, { glyph: string; label: string }> = {
-  OWNED: { glyph: "💿", label: "OWNED — local audio, can decode, mix and record" },
-  STREAM_PLAYABLE: {
-    glyph: "📡",
-    label: "STREAM PLAYABLE — plays inline only, no DSP or recording",
+const CAPABILITY_ICONS: Record<
+  Capability,
+  { Icon: typeof Disc3; label: string; className: string }
+> = {
+  OWNED: {
+    Icon: Disc3,
+    label: "OWNED — local audio, can decode, mix and record",
+    className: "cap-owned",
   },
-  LINK_ONLY: { glyph: "🔗", label: "LINK ONLY — opens externally" },
+  STREAM_PLAYABLE: {
+    Icon: RadioTower,
+    label: "STREAM PLAYABLE — plays inline only, no DSP or recording",
+    className: "cap-stream",
+  },
+  LINK_ONLY: {
+    Icon: LinkIcon,
+    label: "LINK ONLY — opens externally",
+    className: "cap-link",
+  },
 };
 
 const COLUMNS: { field: SortField; label: string }[] = [
@@ -88,7 +101,7 @@ export default function LibraryTable(props: Props) {
           <thead>
             <tr>
               <th className="cap-col" title="Capability">
-                ⚑
+                <Flag size={12} />
               </th>
               {COLUMNS.map((c) => (
                 <th key={c.field} onClick={() => toggleSort(c.field)}>
@@ -118,7 +131,9 @@ export default function LibraryTable(props: Props) {
                     onDoubleClick={() => onActivate(t)}
                   >
                     <td className="cap-col">
-                      <span title={cap.label}>{cap.glyph}</span>
+                      <span className={`cap-icon ${cap.className}`} title={cap.label}>
+                        <cap.Icon size={15} />
+                      </span>
                     </td>
                     <td>{t.title ?? "—"}</td>
                     <td>{t.artist ?? "—"}</td>

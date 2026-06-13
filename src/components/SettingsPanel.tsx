@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { X } from "lucide-react";
 import * as ipc from "../lib/ipc";
 import type { IntegrationStatus } from "../lib/types";
 
@@ -90,7 +91,7 @@ export default function SettingsPanel({ onClose, onError, onSaved }: Props) {
         <div className="settings-header">
           <h2>Settings</h2>
           <button className="settings-close" onClick={onClose} title="Close">
-            ✕
+            <X size={15} />
           </button>
         </div>
 

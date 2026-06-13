@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ChevronLeft, ChevronRight, ExternalLink, RadioTower, X } from "lucide-react";
 import type { Track } from "../lib/types";
 
 interface Props {
@@ -123,21 +124,22 @@ export default function StreamPlayer(props: Props) {
           onClick={() => setDocked(false)}
           title={`Show player — ${track.title ?? "stream"}`}
         >
-          <span className="stream-dock-chevron">‹</span>
-          <span className="stream-dock-icon">📡</span>
+          <ChevronLeft size={16} className="stream-dock-chevron" />
+          <RadioTower size={14} className="stream-dock-icon" />
         </button>
       )}
       <div className={`stream-player${docked ? " docked" : ""}`}>
       <div className="stream-player-header">
         <span className="stream-player-title" title={track.title ?? ""}>
-          📡 {track.title ?? "Stream"}
+          <RadioTower size={13} className="np-stream-icon" />
+          {track.title ?? "Stream"}
         </span>
         <button
           className="stream-player-dock"
           onClick={() => setDocked(true)}
           title="Dock — hide the video, keep playing"
         >
-          ›
+          <ChevronRight size={16} />
         </button>
         <a
           className="stream-player-link"
@@ -146,10 +148,10 @@ export default function StreamPlayer(props: Props) {
           rel="noreferrer"
           title="Open on YouTube"
         >
-          ↗
+          <ExternalLink size={13} />
         </a>
         <button className="stream-player-close" onClick={onClose} title="Stop stream">
-          ✕
+          <X size={14} />
         </button>
       </div>
       <iframe

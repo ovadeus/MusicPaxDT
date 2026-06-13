@@ -1,3 +1,4 @@
+import { Pause, Play, Square } from "lucide-react";
 import type { PlaybackState } from "../lib/types";
 
 interface Props {
@@ -18,7 +19,11 @@ export default function TransportControls({ state, canPlay, onPlay, onPause, onS
         onClick={playing ? onPause : onPlay}
         title={playing ? "Pause" : "Play"}
       >
-        {playing ? "❚❚" : "▶"}
+        {playing ? (
+          <Pause size={16} fill="currentColor" />
+        ) : (
+          <Play size={16} fill="currentColor" />
+        )}
       </button>
       <button
         className="transport-button"
@@ -26,7 +31,7 @@ export default function TransportControls({ state, canPlay, onPlay, onPause, onS
         onClick={onStop}
         title="Stop"
       >
-        ■
+        <Square size={12} fill="currentColor" />
       </button>
     </div>
   );

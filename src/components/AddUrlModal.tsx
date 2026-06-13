@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { X } from "lucide-react";
 import * as ipc from "../lib/ipc";
 import type { MirrorProgress } from "../lib/types";
 
@@ -64,7 +65,7 @@ export default function AddUrlModal({ onClose, onError, onDone }: Props) {
         <div className="settings-header">
           <h2>Add URL / Mirror playlist</h2>
           <button className="settings-close" onClick={onClose} disabled={busy} title="Close">
-            ✕
+            <X size={15} />
           </button>
         </div>
 
@@ -101,7 +102,7 @@ export default function AddUrlModal({ onClose, onError, onDone }: Props) {
         </div>
 
         <p className="settings-hint">
-          Streams play through the official YouTube player (📡 STREAM PLAYABLE — no
+          Streams play through the official YouTube player (STREAM PLAYABLE — no
           EQ, no recording). Mirroring creates a playlist with the same name and
           works with no setup: public Spotify playlists are read straight from the
           page (first ~100 tracks). Optional, in Settings → Integrations: Spotify

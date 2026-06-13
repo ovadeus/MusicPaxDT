@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { RadioTower, Volume2, VolumeX } from "lucide-react";
 import { formatDuration } from "./LibraryTable";
 import TransportControls from "./TransportControls";
 import VuMeter from "./VuMeter";
@@ -50,7 +51,9 @@ export default function NowPlayingBar(props: Props) {
         ) : track ? (
           <>
             <div className="np-title">
-              {track.capability === "STREAM_PLAYABLE" ? "📡 " : ""}
+              {track.capability === "STREAM_PLAYABLE" && (
+                <RadioTower size={13} className="np-stream-icon" />
+              )}
               {track.title ?? "Untitled"}
             </div>
             <div className="np-artist">{track.artist ?? "Unknown artist"}</div>
@@ -96,7 +99,9 @@ export default function NowPlayingBar(props: Props) {
       </div>
 
       <div className="np-volume" title="Volume">
-        <span className="np-volume-icon">{volume === 0 ? "🔇" : "🔊"}</span>
+        <span className="np-volume-icon">
+          {volume === 0 ? <VolumeX size={15} /> : <Volume2 size={15} />}
+        </span>
         <input
           type="range"
           className="volume-slider"

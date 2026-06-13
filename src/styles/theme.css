@@ -234,6 +234,46 @@ body {
   cursor: default;
 }
 
+.cap-col svg {
+  vertical-align: middle;
+}
+
+.cap-icon {
+  display: inline-flex;
+  align-items: center;
+}
+
+.cap-owned {
+  color: var(--text-dim);
+}
+
+.cap-stream {
+  color: var(--accent);
+}
+
+.cap-link {
+  color: var(--text-dim);
+}
+
+/* lucide icons inside buttons/labels align with text */
+button svg,
+.np-title svg,
+.stream-player-title svg,
+.np-volume-icon svg {
+  vertical-align: -2px;
+}
+
+.np-stream-icon {
+  margin-right: 5px;
+  color: var(--accent);
+}
+
+.record-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
 .num {
   text-align: right;
   font-variant-numeric: tabular-nums;
