@@ -106,9 +106,26 @@ by file path. Double-click a track to play it.
   milestones
 - ✅ VU meters, transport, and volume work identically for live input
 
-Later milestones: internet radio, DJ decks & mixer, YouTube embeds (official
-IFrame player only), AI integrations — all behind the same `SourceAdapter`
-trait and capability gate.
+## Stream lane & Mirror Engine v1 (pulled forward from M5)
+
+- ✅ **Add URL**: paste a YouTube link → stored as a 📡 `STREAM_PLAYABLE`
+  track (title via oEmbed). Plays in the official YouTube IFrame embed —
+  never through the audio engine, which refuses non-OWNED tracks by design.
+  No DSP, no recording, no downloading, ever.
+- ✅ **Mirror Engine v1**: paste a Spotify playlist URL (official Web API with
+  your client credentials) or an "Artist - Title" list / Exportify CSV — each
+  entry is matched to YouTube (duration ± seconds, official/"Topic"-channel
+  preference, live/cover/remix penalties) and saved into a new playlist.
+  Searches use your YouTube Data API key when configured, with a keyless
+  fallback that works out of the box. LLM-assisted ranking arrives with M5.
+- ✅ **Playlists (the building layer)**: sidebar playlists freely mix local
+  OWNED files and YouTube streams; playback auto-advances across both lanes
+  (engine end-of-track and IFrame-API ended events).
+- ✅ **Integrations settings**: YouTube API key and Spotify credentials live
+  in the OS keychain — never plaintext.
+
+Later milestones: internet radio, DJ decks & mixer, AI integrations — all
+behind the same `SourceAdapter` trait and capability gate.
 
 ## Repository layout
 

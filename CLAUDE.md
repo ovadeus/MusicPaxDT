@@ -50,6 +50,11 @@ thiserror.
 - M2  Receiver/stereo-stack: line-in capture (turntable/cassette/CD/aux),  ✅ done (2026-06-12)
       RIAA EQ toggle, tone stack, source routing, recording of OWNED sources.
 - M3  Internet radio + podcasts/RSS + CC catalogs (Bandcamp/FMA/Jamendo).  ← next
+- M5a (pulled forward 2026-06-12 by owner): YouTube embed lane + Mirror Engine
+      v1 (Spotify playlist / text list → official YouTube embeds, heuristic
+      matching, keyless search fallback) + playlists mixing OWNED and
+      STREAM_PLAYABLE + Integrations settings (keyring). LLM match-ranking
+      still lands with M5.
 - M4  DJ mode: dual decks, crossfader, EQ, tempo, hot cues, loops; BPM/key.
 - M5  AI subsystem (Anthropic/OpenAI/Ollama) + fingerprint pipeline + Mirror
       Engine + embedded YouTube playback lane.
