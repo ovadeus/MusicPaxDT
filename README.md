@@ -124,8 +124,31 @@ by file path. Double-click a track to play it.
 - ✅ **Integrations settings**: YouTube API key and Spotify credentials live
   in the OS keychain — never plaintext.
 
-Later milestones: internet radio, DJ decks & mixer, AI integrations — all
-behind the same `SourceAdapter` trait and capability gate.
+## Metadata enrichment (pulled forward from M5)
+
+Auto-fill artist/album/year/genre + cover art, with the free-first chain
+CLAUDE.md mandates. Per-row ✨ button or the header **Enrich** (batch over the
+visible tracks):
+
+1. **MusicBrainz** text search (free, no key) — authoritative tags + Cover Art
+   Archive front cover.
+2. **Chromaprint → AcoustID → MusicBrainz** (free; needs an AcoustID key +
+   the `fpcalc` binary) — identifies the actual recording of an untagged or
+   mislabeled local file by its sound.
+3. **LLM** (Anthropic / OpenAI / Ollama — Settings → Metadata enrichment) —
+   cleans messy titles (e.g. YouTube imports) into a query, which is then
+   re-confirmed against free MusicBrainz. Paid providers are gated by a
+   per-batch **spend cap** (default $1); free tiers run regardless. Keys live
+   in the OS keychain.
+
+`fpcalc` ships with Chromaprint (and MusicBrainz Picard). STACK resolves it
+from a Settings path, then `PATH`, then common install locations; for a
+packaged build it should be bundled as a Tauri sidecar. Fingerprinting only
+works on OWNED local audio — never on streams.
+
+Later milestones: internet radio, DJ decks & mixer, the rest of the M5 AI
+subsystem — all behind the same `SourceAdapter` / `LLMProvider` traits and the
+capability gate.
 
 ## Repository layout
 

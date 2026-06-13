@@ -67,6 +67,13 @@ thiserror.
   http://localhost (YouTube embeds need an HTTP referrer), which Tauri's ACL
   treats as remote — unlisted commands fail with "not allowed. Plugin not
   found".
+- Metadata enrichment (ai/, enrich/, sources/musicbrainz.rs) runs free→paid:
+  MusicBrainz text → Chromaprint(fpcalc)+AcoustID → LLM(cleanup)→MusicBrainz
+  confirm. Keys (AcoustID, Anthropic/OpenAI) in keychain via net::keyring_*.
+  fpcalc is an external binary resolved from settings→PATH→known paths (incl.
+  Picard); bundle it as a Tauri sidecar for distribution. LLM spend is capped
+  per batch (enrich.spend_cap_usd, default $1); free tiers ignore the cap.
+  Network/keychain unit tests are #[ignore]; run with --include-ignored.
 - Cargo.lock pins transitive `time` to 0.3.47. time 0.3.48 (2026-06-12) breaks
   tauri-utils/cookie with E0119 coherence errors on stable Rust. If a lockfile
   regen breaks the build there: `cargo update time --precise 0.3.47`.
