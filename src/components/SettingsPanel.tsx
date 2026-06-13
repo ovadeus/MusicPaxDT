@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import * as ipc from "../lib/ipc";
+import type { IntegrationStatus } from "../lib/types";
 
 interface Props {
   onClose: () => void;
@@ -32,6 +33,10 @@ const MP3_BITRATES = [
 export default function SettingsPanel({ onClose, onError, onSaved }: Props) {
   const [values, setValues] = useState<Record<string, string>>({});
   const [loaded, setLoaded] = useState(false);
+  const [integrations, setIntegrations] = useState<IntegrationStatus | null>(null);
+  const [ytKey, setYtKey] = useState("");
+  const [spotifyId, setSpotifyId] = useState("");
+  const [spotifySecret, setSpotifySecret] = useState("");
 
   useEffect(() => {
     ipc
@@ -41,7 +46,29 @@ export default function SettingsPanel({ onClose, onError, onSaved }: Props) {
         setLoaded(true);
       })
       .catch((e) => onError(`Failed to load settings: ${e}`));
+    ipc.integrationStatus().then(setIntegrations).catch(() => {});
   }, [onError]);
+
+  const saveYoutubeKey = async () => {
+    try {
+      await ipc.setYoutubeApiKey(ytKey);
+      setYtKey("");
+      setIntegrations(await ipc.integrationStatus());
+    } catch (e) {
+      onError(`${e}`);
+    }
+  };
+
+  const saveSpotify = async () => {
+    try {
+      await ipc.setSpotifyCredentials(spotifyId, spotifySecret);
+      setSpotifyId("");
+      setSpotifySecret("");
+      setIntegrations(await ipc.integrationStatus());
+    } catch (e) {
+      onError(`${e}`);
+    }
+  };
 
   const update = async (key: string, value: string) => {
     setValues((cur) => ({ ...cur, [key]: value }));
@@ -129,6 +156,67 @@ export default function SettingsPanel({ onClose, onError, onSaved }: Props) {
                   " MP3 supports inputs up to 48 kHz — use a lossless format for hi-res interfaces."}
                 {format === "flac" &&
                   " FLAC encodes when you stop — fine up to roughly a vinyl side per take."}
+              </p>
+            </section>
+
+            <section className="settings-section">
+              <h3>Integrations</h3>
+              <div className="integration-row">
+                <span>
+                  YouTube Data API key{" "}
+                  <em className={integrations?.youtubeApiKey ? "ok" : ""}>
+                    {integrations?.youtubeApiKey
+                      ? "configured"
+                      : "not set (keyless search fallback in use)"}
+                  </em>
+                </span>
+                <div className="integration-inputs">
+                  <input
+                    type="password"
+                    placeholder="Paste API key"
+                    value={ytKey}
+                    onChange={(e) => setYtKey(e.target.value)}
+                  />
+                  <button onClick={saveYoutubeKey} disabled={!ytKey.trim()}>
+                    Save
+                  </button>
+                </div>
+              </div>
+
+              <div className="integration-row">
+                <span>
+                  Spotify credentials{" "}
+                  <em className={integrations?.spotifyCredentials ? "ok" : ""}>
+                    {integrations?.spotifyCredentials ? "configured" : "not set"}
+                  </em>
+                </span>
+                <div className="integration-inputs">
+                  <input
+                    type="password"
+                    placeholder="Client ID"
+                    value={spotifyId}
+                    onChange={(e) => setSpotifyId(e.target.value)}
+                  />
+                  <input
+                    type="password"
+                    placeholder="Client Secret"
+                    value={spotifySecret}
+                    onChange={(e) => setSpotifySecret(e.target.value)}
+                  />
+                  <button
+                    onClick={saveSpotify}
+                    disabled={!spotifyId.trim() || !spotifySecret.trim()}
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+
+              <p className="settings-hint">
+                Keys are stored in the system keychain, never in plain text.
+                Spotify credentials (free at developer.spotify.com) let Mirror
+                read public playlist track lists; a YouTube API key makes match
+                search more reliable than the built-in keyless fallback.
               </p>
             </section>
           </>

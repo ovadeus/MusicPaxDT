@@ -7,9 +7,13 @@ import type {
   AudioDevice,
   EngineStatus,
   ImportResult,
+  IntegrationStatus,
   LineInSource,
+  MirrorProgress,
+  MirrorReport,
   NowPlaying,
   PlaybackState,
+  PlaylistInfo,
   RecordingState,
   SortSpec,
   Track,
@@ -125,6 +129,57 @@ export function setSetting(key: string, value: string): Promise<void> {
 
 export function recordingFormatLabel(): Promise<string> {
   return invoke<string>("recording_format_label");
+}
+
+// --- streams, mirror, playlists -------------------------------------------
+
+export function importStreamUrl(url: string): Promise<Track> {
+  return invoke<Track>("import_stream_url", { url });
+}
+
+export function mirrorPlaylist(input: string): Promise<MirrorReport> {
+  return invoke<MirrorReport>("mirror_playlist", { input });
+}
+
+export function onMirrorProgress(
+  cb: (p: MirrorProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<MirrorProgress>("mirror-progress", (e) => cb(e.payload));
+}
+
+export function listPlaylists(): Promise<PlaylistInfo[]> {
+  return invoke<PlaylistInfo[]>("list_playlists");
+}
+
+export function createPlaylist(name: string): Promise<number> {
+  return invoke<number>("create_playlist", { name });
+}
+
+export function playlistTracks(playlistId: number): Promise<Track[]> {
+  return invoke<Track[]>("playlist_tracks", { playlistId });
+}
+
+export function addToPlaylist(playlistId: number, trackId: number): Promise<void> {
+  return invoke<void>("add_to_playlist", { playlistId, trackId });
+}
+
+export function deletePlaylist(playlistId: number): Promise<void> {
+  return invoke<void>("delete_playlist", { playlistId });
+}
+
+export function integrationStatus(): Promise<IntegrationStatus> {
+  return invoke<IntegrationStatus>("integration_status");
+}
+
+export function setYoutubeApiKey(key: string): Promise<void> {
+  return invoke<void>("set_youtube_api_key", { key });
+}
+
+export function setSpotifyCredentials(
+  clientId: string,
+  clientSecret: string,
+): Promise<void> {
+  return invoke<void>("set_spotify_credentials", { clientId, clientSecret });
 }
 
 // --- engine events -------------------------------------------------------

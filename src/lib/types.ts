@@ -73,6 +73,32 @@ export interface RecordingState {
   recordedMs: number;
 }
 
+export interface PlaylistInfo {
+  id: number;
+  name: string;
+  trackCount: number;
+}
+
+export interface MirrorReport {
+  playlistId: number;
+  playlistName: string;
+  total: number;
+  matched: number;
+  failed: string[];
+}
+
+export interface MirrorProgress {
+  done: number;
+  total: number;
+  matched: number;
+  current: string;
+}
+
+export interface IntegrationStatus {
+  youtubeApiKey: boolean;
+  spotifyCredentials: boolean;
+}
+
 export type SortField =
   | "title"
   | "artist"

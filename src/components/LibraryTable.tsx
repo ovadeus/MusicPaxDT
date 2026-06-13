@@ -1,13 +1,17 @@
-import type { Capability, SortField, SortSpec, Track } from "../lib/types";
+import type { Capability, PlaylistInfo, SortField, SortSpec, Track } from "../lib/types";
 
 interface Props {
   tracks: Track[];
+  heading?: string;
+  searchable: boolean;
   query: string;
   onQueryChange: (q: string) => void;
   sort: SortSpec;
   onSortChange: (s: SortSpec) => void;
   onActivate: (track: Track) => void;
   nowPlayingId: number | null;
+  playlists: PlaylistInfo[];
+  onAddToPlaylist: (playlistId: number, trackId: number) => void;
 }
 
 const CAPABILITY_ICONS: Record<Capability, { glyph: string; label: string }> = {
@@ -37,8 +41,19 @@ export function formatDuration(ms: number | null): string {
 }
 
 export default function LibraryTable(props: Props) {
-  const { tracks, query, onQueryChange, sort, onSortChange, onActivate, nowPlayingId } =
-    props;
+  const {
+    tracks,
+    heading,
+    searchable,
+    query,
+    onQueryChange,
+    sort,
+    onSortChange,
+    onActivate,
+    nowPlayingId,
+    playlists,
+    onAddToPlaylist,
+  } = props;
 
   const toggleSort = (field: SortField) => {
     if (sort.field === field) {
@@ -54,13 +69,16 @@ export default function LibraryTable(props: Props) {
   return (
     <section className="library">
       <div className="library-toolbar">
-        <input
-          type="search"
-          className="search-box"
-          placeholder="Search title, artist, album, genre…"
-          value={query}
-          onChange={(e) => onQueryChange(e.target.value)}
-        />
+        {heading && <h2 className="library-heading">{heading}</h2>}
+        {searchable && (
+          <input
+            type="search"
+            className="search-box"
+            placeholder="Search title, artist, album, genre…"
+            value={query}
+            onChange={(e) => onQueryChange(e.target.value)}
+          />
+        )}
         <span className="track-count">
           {tracks.length} track{tracks.length === 1 ? "" : "s"}
         </span>
@@ -78,13 +96,16 @@ export default function LibraryTable(props: Props) {
                   {arrow(c.field)}
                 </th>
               ))}
+              <th className="add-col" />
             </tr>
           </thead>
           <tbody>
             {tracks.length === 0 ? (
               <tr>
-                <td className="empty-row" colSpan={COLUMNS.length + 1}>
-                  Library is empty — use “Import Folder” to add your music.
+                <td className="empty-row" colSpan={COLUMNS.length + 2}>
+                  {heading
+                    ? "This playlist is empty — add tracks with the + button."
+                    : "Library is empty — use “Import Folder” or “Add URL” to add music."}
                 </td>
               </tr>
             ) : (
@@ -105,6 +126,28 @@ export default function LibraryTable(props: Props) {
                     <td>{t.genre ?? "—"}</td>
                     <td>{t.year ?? "—"}</td>
                     <td className="num">{formatDuration(t.durationMs)}</td>
+                    <td className="add-col">
+                      {playlists.length > 0 && (
+                        <select
+                          className="add-to-playlist"
+                          title="Add to playlist"
+                          value=""
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => {
+                            const id = Number(e.target.value);
+                            if (id) onAddToPlaylist(id, t.id);
+                            e.target.value = "";
+                          }}
+                        >
+                          <option value="">+</option>
+                          {playlists.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </td>
                   </tr>
                 );
               })
