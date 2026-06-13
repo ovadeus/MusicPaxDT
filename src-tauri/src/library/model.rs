@@ -78,6 +78,25 @@ pub struct PlaylistInfo {
     pub track_count: i64,
 }
 
+/// A proposed metadata fill from an enrichment source (MusicBrainz, AcoustID,
+/// or LLM). `None` fields mean "no suggestion"; the orchestrator merges these
+/// over the existing track and the UI shows them for review.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetadataSuggestion {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub year: Option<i64>,
+    pub genre: Option<String>,
+    pub art_url: Option<String>,
+    pub musicbrainz_id: Option<String>,
+    /// Which tier produced this ("musicbrainz", "acoustid", "llm").
+    pub source: String,
+    /// 0.0..=1.0 rough confidence, for ordering and display.
+    pub confidence: f32,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportResult {

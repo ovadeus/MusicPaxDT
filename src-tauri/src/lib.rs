@@ -1,7 +1,10 @@
+pub mod ai;
 pub mod audio;
 pub mod commands;
+pub mod enrich;
 pub mod error;
 pub mod library;
+pub mod net;
 pub mod sources;
 pub mod state;
 
@@ -82,6 +85,13 @@ pub fn run() {
             commands::streams::playlist_tracks,
             commands::streams::add_to_playlist,
             commands::streams::delete_playlist,
+            commands::enrich::enrich_integration_status,
+            commands::enrich::set_acoustid_key,
+            commands::enrich::set_anthropic_key,
+            commands::enrich::set_openai_key,
+            commands::enrich::enrich_track,
+            commands::enrich::enrich_tracks,
+            commands::enrich::enrich_cost_estimate,
         ])
         .build(tauri::generate_context!());
 

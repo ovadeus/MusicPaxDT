@@ -2,7 +2,6 @@
 //! playlist / pasted list → official YouTube embeds), playlist building, and
 //! integration credentials (OS keychain — never plaintext).
 
-use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
@@ -11,48 +10,15 @@ use tauri::{AppHandle, Emitter, State};
 use crate::error::{AppError, AppResult};
 use crate::library::db;
 use crate::library::model::{Capability, NewTrack, PlaylistInfo, Track};
+use crate::net::{http, keyring_get, keyring_set};
 use crate::sources::{detect, spotify, youtube, DetectedInput};
 use crate::state::{lock_unpoisoned, AppState};
-
-const KEYRING_SERVICE: &str = "org.stack.app";
-
-fn http() -> &'static reqwest::Client {
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .user_agent("STACK/0.1 (open-source desktop music system)")
-            .timeout(Duration::from_secs(20))
-            .build()
-            .unwrap_or_default()
-    })
-}
 
 fn now_unix() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
-}
-
-fn keyring_get(name: &str) -> Option<String> {
-    keyring::Entry::new(KEYRING_SERVICE, name)
-        .ok()?
-        .get_password()
-        .ok()
-        .filter(|s| !s.is_empty())
-}
-
-fn keyring_set(name: &str, value: &str) -> AppResult<()> {
-    let entry = keyring::Entry::new(KEYRING_SERVICE, name)
-        .map_err(|e| AppError::Other(format!("keychain unavailable: {e}")))?;
-    if value.is_empty() {
-        let _ = entry.delete_credential();
-        Ok(())
-    } else {
-        entry
-            .set_password(value)
-            .map_err(|e| AppError::Other(format!("keychain write failed: {e}")))
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -77,13 +43,13 @@ pub fn integration_status() -> IntegrationStatus {
 
 #[tauri::command]
 pub fn set_youtube_api_key(key: String) -> AppResult<()> {
-    keyring_set("youtube_api_key", key.trim())
+    keyring_set("youtube_api_key", key.trim()).map_err(AppError::Other)
 }
 
 #[tauri::command]
 pub fn set_spotify_credentials(client_id: String, client_secret: String) -> AppResult<()> {
-    keyring_set("spotify_client_id", client_id.trim())?;
-    keyring_set("spotify_client_secret", client_secret.trim())
+    keyring_set("spotify_client_id", client_id.trim()).map_err(AppError::Other)?;
+    keyring_set("spotify_client_secret", client_secret.trim()).map_err(AppError::Other)
 }
 
 // ---------------------------------------------------------------------------
