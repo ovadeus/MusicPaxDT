@@ -11,10 +11,21 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let app = tauri::Builder::default()
+    // In production the UI is served over http://localhost:<port> instead of
+    // the tauri:// custom protocol — YouTube embeds require a real HTTP
+    // referrer (player error 153 otherwise). Dev mode already runs on the
+    // Vite server, so the plugin is release-only.
+    let port = portpicker::pick_unused_port().unwrap_or(17_432);
+
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init())
-        .setup(|app| {
+        .plugin(tauri_plugin_dialog::init());
+    if !cfg!(dev) {
+        builder = builder.plugin(tauri_plugin_localhost::Builder::new(port).build());
+    }
+
+    let app = builder
+        .setup(move |app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
             let conn = library::db::open(&data_dir.join("stack.db"))?;
@@ -24,6 +35,17 @@ pub fn run() {
                 db: Arc::new(Mutex::new(conn)),
                 engine,
             });
+
+            let url = if cfg!(dev) {
+                tauri::WebviewUrl::App("index.html".into())
+            } else {
+                tauri::WebviewUrl::External(format!("http://localhost:{port}").parse()?)
+            };
+            tauri::WebviewWindowBuilder::new(app, "main", url)
+                .title("STACK")
+                .inner_size(1280.0, 800.0)
+                .min_inner_size(960.0, 600.0)
+                .build()?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
