@@ -142,3 +142,54 @@ pub async fn download_art(url: &str, dest: &Path) -> Result<(), String> {
     std::fs::write(dest, &bytes).map_err(|e| format!("cover art write failed: {e}"))?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::library::model::Capability;
+
+    fn track(title: &str, artist: &str) -> Track {
+        Track {
+            id: 1,
+            title: Some(title.into()),
+            artist: Some(artist.into()),
+            album: None,
+            year: None,
+            genre: None,
+            bpm: None,
+            musical_key: None,
+            duration_ms: None,
+            uri: "/music/x.flac".into(),
+            source_kind: "local".into(),
+            capability: Capability::Owned,
+            fingerprint: None,
+            musicbrainz_id: None,
+            art_path: None,
+            rating: 0,
+            play_count: 0,
+            added_at: 0,
+        }
+    }
+
+    /// Live free-tier run of the orchestrator (the exact path the Enrich
+    /// button calls) — no AcoustID, no LLM. Confirms MusicBrainz fills the
+    /// album/year for a well-known recording.
+    #[tokio::test]
+    #[ignore = "requires network access"]
+    async fn orchestrator_free_tier_fills_album_and_year() {
+        let cfg = EnrichConfig {
+            acoustid_key: None,
+            fpcalc_path: None,
+            llm: None,
+        };
+        let t = track("Smells Like Teen Spirit", "Nirvana");
+        let outcome = enrich_track(&t, &cfg, true).await.expect("enrich ok");
+        let s = outcome.suggestion.expect("a suggestion");
+        assert!(!outcome.used_llm, "free tier must not touch the LLM");
+        assert_eq!(s.source, "musicbrainz");
+        assert!(s.album.is_some(), "album should be filled, got {:?}", s.album);
+        assert_eq!(s.year, Some(1991), "Nevermind released 1991");
+        assert!(s.musicbrainz_id.is_some(), "should carry an MBID");
+        assert!(s.confidence >= 0.9, "exact match should be confident");
+    }
+}
