@@ -145,17 +145,21 @@ export default function RadioPanel({
     }
   };
 
-  // What to show: favorites (filtered locally by query) or fetched stations.
+  // What to show. Favorites-only view = just favorites (filtered by query).
+  // "Show all" = favorites pinned on top (so custom streams, which live only
+  // in favorites and aren't in the public directory, always appear), then the
+  // directory results with any duplicates removed.
   const visible = useMemo(() => {
-    if (!showFavorites) return stations;
     const q = query.trim().toLowerCase();
-    if (!q) return favorites;
-    return favorites.filter(
-      (s) =>
-        s.name.toLowerCase().includes(q) ||
-        (s.tags ?? "").toLowerCase().includes(q) ||
-        (s.country ?? "").toLowerCase().includes(q),
-    );
+    const matchFav = (s: RadioStation) =>
+      !q ||
+      s.name.toLowerCase().includes(q) ||
+      (s.tags ?? "").toLowerCase().includes(q) ||
+      (s.country ?? "").toLowerCase().includes(q);
+    const favMatch = favorites.filter(matchFav);
+    if (showFavorites) return favMatch;
+    const favSet = new Set(favMatch.map((f) => f.url));
+    return [...favMatch, ...stations.filter((s) => !favSet.has(s.url))];
   }, [showFavorites, stations, favorites, query]);
 
   return (
