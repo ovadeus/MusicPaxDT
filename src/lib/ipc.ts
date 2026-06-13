@@ -231,6 +231,19 @@ export function deletePlaylist(playlistId: number): Promise<void> {
   return invoke<void>("delete_playlist", { playlistId });
 }
 
+export interface MpxImportReport {
+  playlistId: number;
+  playlistName: string;
+  imported: number;
+  skipped: number;
+  duplicates: number;
+  warnings: string[];
+}
+
+export function importMpxPlaylist(path: string): Promise<MpxImportReport> {
+  return invoke<MpxImportReport>("import_mpx_playlist", { path });
+}
+
 export function radioTop(limit?: number): Promise<RadioStation[]> {
   return invoke<RadioStation[]>("radio_top", { limit: limit ?? null });
 }

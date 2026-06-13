@@ -82,6 +82,14 @@ thiserror.
 - Run `cargo test -- --include-ignored` for the live audio tests (needs an
   output device); plain `cargo test` skips them.
 
+## .mpx import
+- MusicPax `.mpx` playlist files are plain UTF-8 JSON (current export). Parser
+  is sources/mpx.rs; import_mpx_playlist command maps tracks → STREAM_PLAYABLE
+  (youtube) / LINK_ONLY (spotify, soundcloud) library rows + a new playlist,
+  sorted by position, deduped by URL within the import. Legacy AES `.mpx`
+  (magic `MPAX`) is detected and reported, not decrypted (would need aes/md5
+  deps — ask before adding).
+
 ## License
 GPLv3 or MPL-2.0 (decide before adding copyleft-incompatible deps). Honor
 attribution for SoundCloud, MusicBrainz, AcoustID, Cover Art Archive.

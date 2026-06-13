@@ -1,4 +1,5 @@
 pub mod local;
+pub mod mpx;
 pub mod musicbrainz;
 pub mod radio;
 pub mod spotify;

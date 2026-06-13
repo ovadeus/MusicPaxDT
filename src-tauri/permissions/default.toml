@@ -46,6 +46,7 @@ commands.allow = [
     "playlist_tracks",
     "add_to_playlist",
     "delete_playlist",
+    "import_mpx_playlist",
     "enrich_integration_status",
     "set_acoustid_key",
     "set_anthropic_key",

@@ -91,6 +91,7 @@ pub fn run() {
             commands::streams::playlist_tracks,
             commands::streams::add_to_playlist,
             commands::streams::delete_playlist,
+            commands::streams::import_mpx_playlist,
             commands::enrich::enrich_integration_status,
             commands::enrich::set_acoustid_key,
             commands::enrich::set_anthropic_key,

@@ -302,6 +302,110 @@ pub async fn mirror_playlist(
 }
 
 // ---------------------------------------------------------------------------
+// .mpx import (MusicPax playlist export)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MpxImportReport {
+    pub playlist_id: i64,
+    pub playlist_name: String,
+    pub imported: usize,
+    pub skipped: usize,
+    pub duplicates: usize,
+    pub warnings: Vec<String>,
+}
+
+/// Map a MusicPax sourceType onto our capability model + source_kind.
+/// YouTube is the first-class playable lane; direct-stream types stay
+/// STREAM_PLAYABLE; SoundCloud/Spotify can't play inline so they're LINK_ONLY.
+fn capability_for(source_type: Option<&str>) -> (Capability, String) {
+    match source_type.unwrap_or("") {
+        "youtube" => (Capability::StreamPlayable, "youtube".into()),
+        "spotify" | "soundcloud" => (Capability::LinkOnly, source_type.unwrap().into()),
+        "" => (Capability::StreamPlayable, "stream".into()),
+        other => (Capability::StreamPlayable, other.into()),
+    }
+}
+
+/// Import a MusicPax `.mpx` playlist file (plain JSON; legacy encrypted is
+/// reported, not parsed). Creates a new playlist and adds each track; tracks
+/// with no usable URL are skipped, and the same URL is added to the playlist
+/// only once (de-duped within the import).
+#[tauri::command]
+pub async fn import_mpx_playlist(
+    path: String,
+    state: State<'_, AppState>,
+) -> AppResult<MpxImportReport> {
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes = std::fs::read(&path)
+            .map_err(|e| AppError::Other(format!("cannot read {path}: {e}")))?;
+        let parsed = crate::sources::mpx::parse_mpx(&bytes).map_err(AppError::Other)?;
+
+        let conn = lock_unpoisoned(&db);
+        let playlist_id = db::create_playlist(&conn, &parsed.name)?;
+
+        let mut imported = 0usize;
+        let mut skipped = 0usize;
+        let mut duplicates = 0usize;
+        let mut seen = std::collections::HashSet::new();
+        let added_at = now_unix();
+
+        for t in &parsed.tracks {
+            let Some(url) = t.url.clone() else {
+                skipped += 1;
+                continue;
+            };
+            if !seen.insert(url.clone()) {
+                duplicates += 1;
+                continue;
+            }
+            let (capability, source_kind) = capability_for(t.source_type.as_deref());
+            let new_track = NewTrack {
+                title: t.title.clone(),
+                artist: t.artist.clone(),
+                album: t.album.clone(),
+                year: t.year,
+                genre: t.category.clone(),
+                duration_ms: t.duration_ms,
+                uri: url.clone(),
+                source_kind,
+                capability,
+            };
+            // Insert (dedupes existing library rows by uri), then attach the
+            // resulting track to the new playlist.
+            db::insert_track(&conn, &new_track, added_at)?;
+            if let Some(track) = db::get_track_by_uri(&conn, &url)? {
+                if let Some(cover) = &t.cover {
+                    let _ = db::set_track_art_path(&conn, track.id, cover);
+                }
+                db::add_to_playlist(&conn, playlist_id, track.id)?;
+                imported += 1;
+            } else {
+                skipped += 1;
+            }
+        }
+
+        let mut warnings = parsed.warnings;
+        if duplicates > 0 {
+            warnings.push(format!("{duplicates} duplicate URL(s) collapsed"));
+        }
+
+        Ok(MpxImportReport {
+            playlist_id,
+            playlist_name: parsed.name,
+            imported,
+            skipped,
+            duplicates,
+            warnings,
+        })
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("mpx import task failed: {e}")))?
+}
+
+// ---------------------------------------------------------------------------
 // Playlists (the building layer)
 // ---------------------------------------------------------------------------
 

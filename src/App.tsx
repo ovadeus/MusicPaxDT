@@ -334,6 +334,34 @@ export default function App() {
     }
   };
 
+  const handleImportMpx = async () => {
+    const file = await open({
+      multiple: false,
+      title: "Import MusicPax playlist",
+      filters: [{ name: "MusicPax playlist", extensions: ["mpx", "json"] }],
+    });
+    if (typeof file !== "string") return;
+    setBusy(true);
+    try {
+      const r = await ipc.importMpxPlaylist(file);
+      const extra = [
+        r.skipped ? `${r.skipped} skipped` : null,
+        r.duplicates ? `${r.duplicates} duplicates` : null,
+      ]
+        .filter(Boolean)
+        .join(", ");
+      showStatus(
+        `Imported “${r.playlistName}” — ${r.imported} track(s)${extra ? ` (${extra})` : ""}`,
+      );
+      await refreshPlaylists();
+      setView({ kind: "playlist", id: r.playlistId, name: r.playlistName });
+    } catch (e) {
+      showStatus(`MPX import failed: ${e}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleDeviceChange = async (id: string) => {
     const previous = deviceId;
     setDeviceId(id);
@@ -407,6 +435,14 @@ export default function App() {
               )}
               <button className="import-button" onClick={handleImport} disabled={busy}>
                 {busy ? "Importing…" : "Import Folder"}
+              </button>
+              <button
+                className="addurl-button"
+                onClick={handleImportMpx}
+                disabled={busy}
+                title="Import a MusicPax .mpx playlist"
+              >
+                Import .mpx
               </button>
             </>
           )}
