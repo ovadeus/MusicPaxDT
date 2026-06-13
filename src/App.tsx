@@ -333,22 +333,22 @@ export default function App() {
         <Logo />
         <SourceSelector active={source} onSelect={handleSelectSource} />
         <div className="header-controls">
-          <select
-            className="device-picker"
-            value={deviceId}
-            onChange={(e) => handleDeviceChange(e.target.value)}
-            title="Output device"
-          >
-            <option value="default">System default output</option>
-            {devices.map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.name}
-                {d.isDefault ? " (default)" : ""}
-              </option>
-            ))}
-          </select>
           {curator && (
             <>
+              <select
+                className="device-picker"
+                value={deviceId}
+                onChange={(e) => handleDeviceChange(e.target.value)}
+                title="Output device"
+              >
+                <option value="default">System default output</option>
+                {devices.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name}
+                    {d.isDefault ? " (default)" : ""}
+                  </option>
+                ))}
+              </select>
               <button
                 className="addurl-button"
                 onClick={() => setAddUrlOpen(true)}
