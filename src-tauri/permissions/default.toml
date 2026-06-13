@@ -44,7 +44,7 @@ commands.allow = [
     "set_acoustid_key",
     "set_anthropic_key",
     "set_openai_key",
-    "enrich_track",
-    "enrich_tracks",
+    "propose_enrichment",
+    "apply_enrichment",
     "enrich_cost_estimate",
 ]

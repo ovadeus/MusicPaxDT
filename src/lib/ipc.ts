@@ -6,10 +6,10 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AudioDevice,
   EngineStatus,
-  EnrichBatchReport,
+  ApprovedEdit,
   EnrichIntegrationStatus,
   EnrichProgress,
-  EnrichResult,
+  EnrichProposeReport,
   ImportResult,
   IntegrationStatus,
   LineInSource,
@@ -166,12 +166,14 @@ export function setOpenaiKey(key: string): Promise<void> {
   return invoke<void>("set_openai_key", { key });
 }
 
-export function enrichTrack(trackId: number): Promise<EnrichResult> {
-  return invoke<EnrichResult>("enrich_track", { trackId });
+export function proposeEnrichment(
+  trackIds: number[],
+): Promise<EnrichProposeReport> {
+  return invoke<EnrichProposeReport>("propose_enrichment", { trackIds });
 }
 
-export function enrichTracks(trackIds: number[]): Promise<EnrichBatchReport> {
-  return invoke<EnrichBatchReport>("enrich_tracks", { trackIds });
+export function applyEnrichment(edits: ApprovedEdit[]): Promise<number> {
+  return invoke<number>("apply_enrichment", { edits });
 }
 
 export function enrichCostEstimate(count: number): Promise<number> {

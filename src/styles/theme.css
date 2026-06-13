@@ -705,6 +705,146 @@ button svg,
   word-break: break-all;
 }
 
+/* ---------- enrich review modal ---------- */
+
+.review-panel {
+  max-width: 720px;
+  width: 90vw;
+}
+
+.review-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.review-bulk {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.review-bulk button {
+  background: var(--bg);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.review-list {
+  max-height: 52vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.review-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.review-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.review-from {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-source {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.review-source.conf-high {
+  background: rgba(80, 220, 100, 0.16);
+  color: rgb(110, 230, 130);
+}
+.review-source.conf-mid {
+  background: rgba(235, 200, 60, 0.16);
+  color: rgb(235, 205, 90);
+}
+.review-source.conf-low {
+  background: rgba(240, 130, 70, 0.16);
+  color: rgb(240, 150, 90);
+}
+
+.review-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.review-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.review-field input[type="checkbox"] {
+  accent-color: var(--accent);
+  flex-shrink: 0;
+}
+
+.review-field-name {
+  width: 52px;
+  flex-shrink: 0;
+  color: var(--text-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.review-old {
+  color: var(--text-dim);
+  text-decoration: line-through;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-arrow {
+  color: var(--text-dim);
+}
+
+.review-new {
+  color: var(--text);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-art {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
 .row-actions {
   display: flex;
   align-items: center;

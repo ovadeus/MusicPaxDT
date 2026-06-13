@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Settings as SettingsIcon, Sparkles } from "lucide-react";
 import AddUrlModal from "./components/AddUrlModal";
+import EnrichReviewModal from "./components/EnrichReviewModal";
 import TrackEditModal from "./components/TrackEditModal";
 import LibraryTable from "./components/LibraryTable";
 import Logo from "./components/Logo";
@@ -15,6 +16,7 @@ import * as ipc from "./lib/ipc";
 import type {
   AudioDevice,
   EngineStatus,
+  EnrichProposal,
   LineInSource,
   NowPlaying,
   PlaybackState,
@@ -52,11 +54,12 @@ export default function App() {
   const [enrichProgress, setEnrichProgress] = useState<{
     done: number;
     total: number;
-    matched: number;
+    proposed: number;
     spentUsd: number;
     current: string;
     capped: boolean;
   } | null>(null);
+  const [proposals, setProposals] = useState<EnrichProposal[] | null>(null);
   const [formatLabel, setFormatLabel] = useState("");
   const [stream, setStream] = useState<Track | null>(null);
   const [streamPlaying, setStreamPlaying] = useState(true);
@@ -120,56 +123,49 @@ export default function App() {
     };
   }, [showStatus, refreshPlaylists]);
 
-  const handleEnrichTrack = async (track: Track) => {
-    setEnrichingId(track.id);
+  // Both per-row and batch enrich PROPOSE changes (no writes); the review
+  // modal then lets the user approve per field before anything is applied.
+  const runProposal = async (ids: number[], singleId?: number) => {
+    if (ids.length === 0) return;
     try {
-      const result = await ipc.enrichTrack(track.id);
-      if (result.applied && result.suggestion) {
-        showStatus(
-          `Updated “${result.track.title ?? "track"}” from ${result.suggestion.source}`,
-        );
-        await refreshTracks();
-      } else {
-        showStatus(`No confident match found for “${track.title ?? "track"}”`);
+      if (singleId == null) {
+        const est = await ipc.enrichCostEstimate(ids.length);
+        if (est > 0) {
+          const ok = window.confirm(
+            `Look up ${ids.length} track(s)?\n\nEstimated AI cost if every track needs the LLM: $${est.toFixed(2)} (capped in Settings). Free MusicBrainz/fingerprint matches cost nothing, and you review everything before it's saved.`,
+          );
+          if (!ok) return;
+        }
       }
-    } catch (e) {
-      showStatus(`${e}`);
-    } finally {
-      setEnrichingId(null);
-    }
-  };
-
-  const handleEnrichAll = async () => {
-    if (tracks.length === 0) return;
-    const ids = tracks.map((t) => t.id);
-    try {
-      const est = await ipc.enrichCostEstimate(ids.length);
-      if (est > 0) {
-        const ok = window.confirm(
-          `Enrich ${ids.length} track(s)?\n\nEstimated AI cost if every track needs the LLM: $${est.toFixed(2)} (capped in Settings). Free MusicBrainz/fingerprint matches cost nothing.`,
-        );
-        if (!ok) return;
-      }
+      if (singleId != null) setEnrichingId(singleId);
       setEnrichProgress({
         done: 0,
         total: ids.length,
-        matched: 0,
+        proposed: 0,
         spentUsd: 0,
         current: "",
         capped: false,
       });
-      const report = await ipc.enrichTracks(ids);
-      const cap = report.capped ? " (spend cap reached)" : "";
-      showStatus(
-        `Enriched ${report.matched}/${report.total} — AI spend $${report.spentUsd.toFixed(2)}${cap}`,
-      );
-      await refreshTracks();
+      const report = await ipc.proposeEnrichment(ids);
+      if (report.proposals.length === 0) {
+        showStatus(
+          report.total === 1
+            ? "No confident match found."
+            : `No matches found for ${report.total} track(s).`,
+        );
+      } else {
+        setProposals(report.proposals);
+      }
     } catch (e) {
       showStatus(`${e}`);
     } finally {
       setEnrichProgress(null);
+      setEnrichingId(null);
     }
   };
+
+  const handleEnrichTrack = (track: Track) => runProposal([track.id], track.id);
+  const handleEnrichAll = () => runProposal(tracks.map((t) => t.id));
 
   // ----- playback routing (the capability gate, UI side) -------------------
 
@@ -384,8 +380,8 @@ export default function App() {
             />
           </div>
           <div className="mirror-progress-text">
-            Enriching {enrichProgress.done}/{enrichProgress.total} ·{" "}
-            {enrichProgress.matched} matched · AI ${enrichProgress.spentUsd.toFixed(2)}
+            Looking up {enrichProgress.done}/{enrichProgress.total} ·{" "}
+            {enrichProgress.proposed} found · AI ${enrichProgress.spentUsd.toFixed(2)}
             {enrichProgress.capped ? " · cap reached (free tiers only)" : ""}
             {enrichProgress.current ? ` · ${enrichProgress.current}` : ""}
           </div>
@@ -526,6 +522,20 @@ export default function App() {
           onDone={(msg) => {
             showStatus(msg);
             refreshPlaylists();
+            refreshTracks();
+          }}
+        />
+      )}
+
+      {proposals && (
+        <EnrichReviewModal
+          proposals={proposals}
+          onClose={() => setProposals(null)}
+          onError={showStatus}
+          onApplied={(n) => {
+            showStatus(
+              n > 0 ? `Applied ${n} track update(s)` : "No changes applied",
+            );
             refreshTracks();
           }}
         />

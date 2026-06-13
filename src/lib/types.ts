@@ -119,25 +119,35 @@ export interface MetadataSuggestion {
   confidence: number;
 }
 
-export interface EnrichResult {
+export interface EnrichProposal {
   track: Track;
-  suggestion: MetadataSuggestion | null;
-  applied: boolean;
+  suggestion: MetadataSuggestion;
+}
+
+export interface EnrichProposeReport {
+  proposals: EnrichProposal[];
+  total: number;
+  spentUsd: number;
+  capped: boolean;
+}
+
+export interface ApprovedEdit {
+  trackId: number;
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  year: number | null;
+  genre: string | null;
+  artUrl: string | null;
+  musicbrainzId: string | null;
 }
 
 export interface EnrichProgress {
   done: number;
   total: number;
-  matched: number;
+  proposed: number;
   spentUsd: number;
   current: string;
-  capped: boolean;
-}
-
-export interface EnrichBatchReport {
-  total: number;
-  matched: number;
-  spentUsd: number;
   capped: boolean;
 }
 

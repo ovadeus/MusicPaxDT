@@ -89,8 +89,8 @@ pub fn run() {
             commands::enrich::set_acoustid_key,
             commands::enrich::set_anthropic_key,
             commands::enrich::set_openai_key,
-            commands::enrich::enrich_track,
-            commands::enrich::enrich_tracks,
+            commands::enrich::propose_enrichment,
+            commands::enrich::apply_enrichment,
             commands::enrich::enrich_cost_estimate,
         ])
         .build(tauri::generate_context!());

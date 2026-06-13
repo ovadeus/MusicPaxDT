@@ -134,122 +134,45 @@ async fn cache_art(app: &AppHandle, track_id: i64, url: &str) -> Option<String> 
     }
 }
 
-/// Merge a suggestion onto a track in the DB (non-null fields win), write tags
-/// back for OWNED local files, and cache art. Returns the updated track.
-async fn apply_suggestion(
-    app: &AppHandle,
-    state_db: &std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>,
-    track: &Track,
-    s: &MetadataSuggestion,
-) -> AppResult<Track> {
-    let art_path = match &s.art_url {
-        Some(url) => cache_art(app, track.id, url).await,
-        None => None,
-    };
-
-    let db = state_db.clone();
-    let track_id = track.id;
-    let edit = db::TrackEdit {
-        title: s.title.clone().or_else(|| track.title.clone()),
-        artist: s.artist.clone().or_else(|| track.artist.clone()),
-        album: s.album.clone().or_else(|| track.album.clone()),
-        year: s.year.or(track.year),
-        genre: s.genre.clone().or_else(|| track.genre.clone()),
-    };
-    let mbid = s.musicbrainz_id.clone();
-    let owned_local = track.capability == crate::library::model::Capability::Owned
-        && track.source_kind == "local";
-
-    tauri::async_runtime::spawn_blocking(move || {
-        let conn = lock_unpoisoned(&db);
-        let updated = db::update_track_metadata(&conn, track_id, &edit)?;
-        if let Some(mbid) = mbid {
-            db::set_track_musicbrainz_id(&conn, track_id, &mbid)?;
-        }
-        if let Some(art) = art_path {
-            db::set_track_art_path(&conn, track_id, &art)?;
-        }
-        if owned_local {
-            crate::library::scan::write_tags(&updated);
-        }
-        db::get_track(&conn, track_id)
-    })
-    .await
-    .map_err(|e| AppError::Other(format!("apply task failed: {e}")))?
-}
-
-// --- commands ---------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EnrichResult {
-    pub track: Track,
-    pub suggestion: Option<MetadataSuggestion>,
-    pub applied: bool,
-}
-
-/// Enrich a single track and apply the result. Used by the per-row button.
-#[tauri::command]
-pub async fn enrich_track(
-    track_id: i64,
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> AppResult<EnrichResult> {
-    let db = state.db.clone();
-    let (track, cfg) = {
-        let conn = lock_unpoisoned(&db);
-        (db::get_track(&conn, track_id)?, build_config(&conn)?)
-    };
-
-    let outcome = enrich::enrich_track(&track, &cfg, true)
-        .await
-        .map_err(AppError::Other)?;
-
-    if let Some(s) = &outcome.suggestion {
-        let updated = apply_suggestion(&app, &db, &track, s).await?;
-        Ok(EnrichResult {
-            track: updated,
-            suggestion: Some(s.clone()),
-            applied: true,
-        })
-    } else {
-        Ok(EnrichResult {
-            track,
-            suggestion: None,
-            applied: false,
-        })
-    }
-}
+// --- commands: propose (no writes) then apply only what the user approves ---
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct EnrichProgress {
     done: usize,
     total: usize,
-    matched: usize,
+    proposed: usize,
     spent_usd: f64,
     current: String,
     capped: bool,
 }
 
+/// One track's proposal: the current track plus the suggested fields. Nothing
+/// is written — the UI shows current→proposed and the user approves per field.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct EnrichBatchReport {
+pub struct EnrichProposal {
+    pub track: Track,
+    pub suggestion: MetadataSuggestion,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnrichProposeReport {
+    pub proposals: Vec<EnrichProposal>,
     pub total: usize,
-    pub matched: usize,
     pub spent_usd: f64,
     pub capped: bool,
 }
 
-/// Enrich every track whose ids are given (the current library view). Emits
-/// `enrich-progress`; stops paid LLM calls once the spend cap is reached
-/// (free tiers keep running).
+/// Run the enrichment chain over the given tracks and RETURN proposals without
+/// touching the library. Emits `enrich-progress`; meters and caps paid LLM spend.
 #[tauri::command]
-pub async fn enrich_tracks(
+pub async fn propose_enrichment(
     track_ids: Vec<i64>,
     app: AppHandle,
     state: State<'_, AppState>,
-) -> AppResult<EnrichBatchReport> {
+) -> AppResult<EnrichProposeReport> {
     let db = state.db.clone();
     let (cfg, cap) = {
         let conn = lock_unpoisoned(&db);
@@ -258,7 +181,7 @@ pub async fn enrich_tracks(
     let per_call = cfg.llm.as_ref().map(|l| l.estimate_cost_usd()).unwrap_or(0.0);
 
     let total = track_ids.len();
-    let mut matched = 0usize;
+    let mut proposals = Vec::new();
     let mut spent = 0.0f64;
     let mut capped = false;
 
@@ -271,8 +194,6 @@ pub async fn enrich_tracks(
             }
         };
         let label = track.title.clone().unwrap_or_else(|| format!("track {id}"));
-
-        // Permit the paid tier only if the next call stays within the cap.
         let allow_llm = !capped && (spent + per_call) <= cap;
 
         let _ = app.emit(
@@ -280,9 +201,9 @@ pub async fn enrich_tracks(
             EnrichProgress {
                 done: i,
                 total,
-                matched,
+                proposed: proposals.len(),
                 spent_usd: spent,
-                current: label.clone(),
+                current: label,
                 capped,
             },
         );
@@ -295,13 +216,20 @@ pub async fn enrich_tracks(
                         capped = true;
                     }
                 }
-                if let Some(s) = &outcome.suggestion {
-                    if apply_suggestion(&app, &db, &track, s).await.is_ok() {
-                        matched += 1;
+                if let Some(suggestion) = outcome.suggestion {
+                    // Only surface a proposal if it actually changes something.
+                    let changes = suggestion.title.is_some()
+                        || suggestion.artist.is_some()
+                        || suggestion.album.is_some()
+                        || suggestion.year.is_some()
+                        || suggestion.genre.is_some()
+                        || suggestion.art_url.is_some();
+                    if changes {
+                        proposals.push(EnrichProposal { track, suggestion });
                     }
                 }
             }
-            Err(e) => eprintln!("enrich {id} failed: {e}"),
+            Err(e) => eprintln!("propose {id} failed: {e}"),
         }
 
         tokio::time::sleep(MB_COURTESY_DELAY).await;
@@ -312,19 +240,93 @@ pub async fn enrich_tracks(
         EnrichProgress {
             done: total,
             total,
-            matched,
+            proposed: proposals.len(),
             spent_usd: spent,
             current: String::new(),
             capped,
         },
     );
 
-    Ok(EnrichBatchReport {
+    Ok(EnrichProposeReport {
+        proposals,
         total,
-        matched,
         spent_usd: spent,
         capped,
     })
+}
+
+/// One approved edit from the review dialog. Each field carries the final
+/// value to set, or null to leave the track's current value untouched.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovedEdit {
+    pub track_id: i64,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub year: Option<i64>,
+    pub genre: Option<String>,
+    pub art_url: Option<String>,
+    pub musicbrainz_id: Option<String>,
+}
+
+/// Apply the user-approved edits. Only the fields present (non-null) are
+/// changed; everything else keeps the track's current value. Writes tags back
+/// for OWNED local files and caches approved cover art.
+#[tauri::command]
+pub async fn apply_enrichment(
+    edits: Vec<ApprovedEdit>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> AppResult<usize> {
+    let db = state.db.clone();
+    let mut applied = 0usize;
+
+    for e in edits {
+        let track = {
+            let conn = lock_unpoisoned(&db);
+            match db::get_track(&conn, e.track_id) {
+                Ok(t) => t,
+                Err(_) => continue,
+            }
+        };
+        let art_path = match &e.art_url {
+            Some(url) => cache_art(&app, e.track_id, url).await,
+            None => None,
+        };
+        let db2 = db.clone();
+        let owned_local = track.capability == crate::library::model::Capability::Owned
+            && track.source_kind == "local";
+        let edit = db::TrackEdit {
+            title: e.title.or(track.title.clone()),
+            artist: e.artist.or(track.artist.clone()),
+            album: e.album.or(track.album.clone()),
+            year: e.year.or(track.year),
+            genre: e.genre.or(track.genre.clone()),
+        };
+        let mbid = e.musicbrainz_id.clone();
+        let track_id = e.track_id;
+        let ok = tauri::async_runtime::spawn_blocking(move || -> AppResult<()> {
+            let conn = lock_unpoisoned(&db2);
+            let updated = db::update_track_metadata(&conn, track_id, &edit)?;
+            if let Some(mbid) = mbid {
+                db::set_track_musicbrainz_id(&conn, track_id, &mbid)?;
+            }
+            if let Some(art) = art_path {
+                db::set_track_art_path(&conn, track_id, &art)?;
+            }
+            if owned_local {
+                crate::library::scan::write_tags(&updated);
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| AppError::Other(format!("apply task failed: {e}")))?;
+        if ok.is_ok() {
+            applied += 1;
+        }
+    }
+    Ok(applied)
 }
 
 /// Cost estimate for enriching `count` tracks with the configured provider,
