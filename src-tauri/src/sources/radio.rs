@@ -201,6 +201,42 @@ fn pick_stream_url(urls: &[String]) -> Option<String> {
     urls.iter().filter(|u| score(u) > 0).max_by_key(|u| score(u)).cloned()
 }
 
+/// SoundStack / cdnstream1 (and similar) web players embed their stream as an
+/// inline `streams = [{"format","host","id","https","port"}]` array. Build the
+/// playable URL from it. This covers a large family of station player pages.
+fn parse_player_streams(html: &str) -> Option<String> {
+    let mut from = 0;
+    while let Some(rel) = html[from..].find("streams") {
+        let start = from + rel + "streams".len();
+        from = start;
+        let after = html[start..].trim_start();
+        if !after.starts_with('=') {
+            continue;
+        }
+        let after_eq = after[1..].trim_start();
+        if !after_eq.starts_with('[') {
+            continue;
+        }
+        // Slice the array literal: from '[' to the first ']' (objects use {}).
+        let lb = html[start..].find('[')? + start;
+        let rb = html[lb..].find(']')? + lb + 1;
+        let arr: serde_json::Value = serde_json::from_str(&html[lb..rb]).ok()?;
+        let first = arr.as_array()?.iter().find(|s| s.get("host").is_some())?;
+        let host = first.get("host")?.as_str()?;
+        let id = first.get("id")?.as_str()?;
+        let https = matches!(first.get("https"), Some(v) if v.as_i64() == Some(1) || v.as_bool() == Some(true));
+        let scheme = if https { "https" } else { "http" };
+        let port = first.get("port").and_then(|v| v.as_i64()).unwrap_or(if https { 443 } else { 80 });
+        let standard = (https && port == 443) || (!https && port == 80);
+        return Some(if standard {
+            format!("{scheme}://{host}/{id}")
+        } else {
+            format!("{scheme}://{host}:{port}/{id}")
+        });
+    }
+    None
+}
+
 fn title_of(html: &str) -> Option<String> {
     let lower = html.to_lowercase();
     let start = lower.find("<title")?;
@@ -318,6 +354,11 @@ pub async fn resolve_stream(input: &str) -> Result<RadioStation, String> {
     }
 
     let name = icy_name.or_else(|| title_of(&body)).unwrap_or_else(|| host_of(input));
+    // Prefer the player's embedded streams[] config (SoundStack/cdnstream1 etc.),
+    // then fall back to scraping any stream-like URL from the page.
+    if let Some(u) = parse_player_streams(&body) {
+        return Ok(custom_station(name, u, None));
+    }
     match pick_stream_url(&extract_urls(&body)) {
         Some(u) => Ok(custom_station(name, u, None)),
         None => Err(
@@ -406,6 +447,27 @@ mod tests {
         let pick = pick_stream_url(&urls).expect("a stream candidate");
         assert!(pick.contains("icecast.audio"));
         assert_eq!(title_of(html).as_deref(), Some("PMG Kauai"));
+    }
+
+    #[test]
+    fn parses_soundstack_streams_array() {
+        // The exact shape KONG FM's player page embeds.
+        let html = r#"<script>cfg_yp_mount = "2788_64";
+            streams = [{"format":"iceaac","host":"pacificmedia.cdnstream1.com","id":"2788_64.aac","https":1,"port":443}];
+            master = 0;</script>"#;
+        assert_eq!(
+            parse_player_streams(html).as_deref(),
+            Some("https://pacificmedia.cdnstream1.com/2788_64.aac"),
+        );
+    }
+
+    #[test]
+    fn soundstack_nonstandard_port_keeps_port() {
+        let html = r#"streams = [{"format":"ice","host":"h.example.com","id":"live","https":0,"port":8000}];"#;
+        assert_eq!(
+            parse_player_streams(html).as_deref(),
+            Some("http://h.example.com:8000/live"),
+        );
     }
 
     #[test]
