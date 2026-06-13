@@ -49,7 +49,10 @@ export default function NowPlayingBar(props: Props) {
           </>
         ) : track ? (
           <>
-            <div className="np-title">{track.title ?? "Untitled"}</div>
+            <div className="np-title">
+              {track.capability === "STREAM_PLAYABLE" ? "📡 " : ""}
+              {track.title ?? "Untitled"}
+            </div>
             <div className="np-artist">{track.artist ?? "Unknown artist"}</div>
           </>
         ) : (

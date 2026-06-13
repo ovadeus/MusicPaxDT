@@ -3,6 +3,12 @@ import type { Track } from "../lib/types";
 
 interface Props {
   track: Track;
+  playing: boolean;
+  volume: number; // 0..1
+  seekRequestMs: number | null;
+  onSeeked: () => void;
+  onPlayingChange: (playing: boolean) => void;
+  onTime: (positionMs: number, durationMs: number) => void;
   onEnded: () => void;
   onClose: () => void;
 }
@@ -13,45 +19,96 @@ function videoIdFrom(uri: string): string | null {
 }
 
 /// Official YouTube IFrame embed — the only way STREAM_PLAYABLE YouTube
-/// content plays in STACK. No DSP, no recording, no stream access; the audio
-/// engine refuses these tracks by design. Ended-detection uses the IFrame
-/// API postMessage protocol so playlists can auto-advance.
-export default function StreamPlayer({ track, onEnded, onClose }: Props) {
+/// content plays in STACK (no DSP, no recording, no stream access; the audio
+/// engine refuses these tracks by design). Transport, volume, seek and
+/// position all bridge over the IFrame API's postMessage protocol — the same
+/// mechanism react-player uses on musicpax.com.
+export default function StreamPlayer(props: Props) {
+  const { track, playing, volume, seekRequestMs, onSeeked, onClose } = props;
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
-  const endedRef = useRef(onEnded);
-  endedRef.current = onEnded;
+  const readyRef = useRef(false);
+
+  // Keep latest callbacks without re-binding listeners.
+  const cbRef = useRef(props);
+  cbRef.current = props;
 
   const videoId = videoIdFrom(track.uri);
 
+  const post = (func: string, args: unknown[] = []) => {
+    iframeRef.current?.contentWindow?.postMessage(
+      JSON.stringify({ event: "command", func, args }),
+      "*",
+    );
+  };
+
   useEffect(() => {
+    readyRef.current = false;
     const onMessage = (e: MessageEvent) => {
       if (typeof e.data !== "string" || !e.origin.includes("youtube")) return;
+      let data: { event?: string; info?: unknown };
       try {
-        const data = JSON.parse(e.data);
-        if (data.event === "onStateChange" && data.info === 0) {
-          endedRef.current();
-        }
+        data = JSON.parse(e.data);
       } catch {
-        // not a player message
+        return;
+      }
+      if (!readyRef.current) {
+        readyRef.current = true;
+        // Push initial volume and desired transport state once the player talks.
+        post("setVolume", [Math.round(cbRef.current.volume * 100)]);
+        if (cbRef.current.playing) post("playVideo");
+      }
+      if (data.event === "onStateChange" && typeof data.info === "number") {
+        if (data.info === 0) cbRef.current.onEnded();
+        else if (data.info === 1) cbRef.current.onPlayingChange(true);
+        else if (data.info === 2) cbRef.current.onPlayingChange(false);
+      } else if (data.event === "infoDelivery" && data.info && typeof data.info === "object") {
+        const info = data.info as { currentTime?: number; duration?: number };
+        if (typeof info.currentTime === "number") {
+          cbRef.current.onTime(
+            Math.round(info.currentTime * 1000),
+            Math.round((info.duration ?? 0) * 1000),
+          );
+        }
       }
     };
     window.addEventListener("message", onMessage);
 
-    // Handshake so the embed starts posting events to us.
-    const listen = window.setInterval(() => {
+    // Handshake until the player responds (it then streams events to us).
+    const handshake = window.setInterval(() => {
+      if (readyRef.current) {
+        window.clearInterval(handshake);
+        return;
+      }
       iframeRef.current?.contentWindow?.postMessage(
         JSON.stringify({ event: "listening", id: "stack-stream", channel: "widget" }),
         "*",
       );
-    }, 500);
-    const stopHandshake = window.setTimeout(() => window.clearInterval(listen), 5000);
+    }, 300);
+    const stopHandshake = window.setTimeout(
+      () => window.clearInterval(handshake),
+      12_000,
+    );
 
     return () => {
       window.removeEventListener("message", onMessage);
-      window.clearInterval(listen);
+      window.clearInterval(handshake);
       window.clearTimeout(stopHandshake);
     };
   }, [videoId]);
+
+  // Transport / volume / seek bridges.
+  useEffect(() => {
+    if (readyRef.current) post(playing ? "playVideo" : "pauseVideo");
+  }, [playing]);
+  useEffect(() => {
+    if (readyRef.current) post("setVolume", [Math.round(volume * 100)]);
+  }, [volume]);
+  useEffect(() => {
+    if (seekRequestMs != null) {
+      post("seekTo", [seekRequestMs / 1000, true]);
+      onSeeked();
+    }
+  }, [seekRequestMs, onSeeked]);
 
   if (!videoId) return null;
 

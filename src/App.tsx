@@ -47,6 +47,10 @@ export default function App() {
   const [addUrlOpen, setAddUrlOpen] = useState(false);
   const [formatLabel, setFormatLabel] = useState("");
   const [stream, setStream] = useState<Track | null>(null);
+  const [streamPlaying, setStreamPlaying] = useState(true);
+  const [streamPos, setStreamPos] = useState(0);
+  const [streamDur, setStreamDur] = useState(0);
+  const [streamSeek, setStreamSeek] = useState<number | null>(null);
 
   const showStatus = useCallback((msg: string) => {
     setStatus(msg);
@@ -133,6 +137,10 @@ export default function App() {
           await ipc.stop().catch(() => {});
           setNow(null);
           setStream(track);
+          setStreamPlaying(true);
+          setStreamPos(0);
+          setStreamDur(0);
+          setStreamSeek(null);
           setEngineStat(null);
           setSource("library");
         } else {
@@ -361,27 +369,44 @@ export default function App() {
       {stream && (
         <StreamPlayer
           track={stream}
+          playing={streamPlaying}
+          volume={volume}
+          seekRequestMs={streamSeek}
+          onSeeked={() => setStreamSeek(null)}
+          onPlayingChange={setStreamPlaying}
+          onTime={(pos, dur) => {
+            setStreamPos(pos);
+            if (dur > 0) setStreamDur(dur);
+          }}
           onEnded={() => playNext(stream.id)}
           onClose={() => setStream(null)}
         />
       )}
 
       <NowPlayingBar
-        track={lineIn || stream ? null : (now?.track ?? null)}
-        lineInLabel={
+        track={
           lineIn
-            ? `Line In — ${lineIn.charAt(0).toUpperCase()}${lineIn.slice(1)}`
+            ? null
             : stream
-              ? `📡 ${stream.title ?? "Stream"}`
-              : null
+              ? { ...stream, durationMs: streamDur > 0 ? streamDur : stream.durationMs }
+              : (now?.track ?? null)
         }
-        state={stream ? "playing" : playState}
-        positionMs={stream ? 0 : positionMs}
+        lineInLabel={
+          lineIn ? `Line In — ${lineIn.charAt(0).toUpperCase()}${lineIn.slice(1)}` : null
+        }
+        state={stream ? (streamPlaying ? "playing" : "paused") : playState}
+        positionMs={stream ? streamPos : positionMs}
         volume={volume}
-        onPlay={() => ipc.play().catch((e) => showStatus(`${e}`))}
-        onPause={() => ipc.pause().catch((e) => showStatus(`${e}`))}
+        onPlay={() =>
+          stream ? setStreamPlaying(true) : ipc.play().catch((e) => showStatus(`${e}`))
+        }
+        onPause={() =>
+          stream ? setStreamPlaying(false) : ipc.pause().catch((e) => showStatus(`${e}`))
+        }
         onStop={handleStop}
-        onSeek={(ms) => ipc.seek(ms).catch((e) => showStatus(`${e}`))}
+        onSeek={(ms) =>
+          stream ? setStreamSeek(ms) : ipc.seek(ms).catch((e) => showStatus(`${e}`))
+        }
         onVolume={handleVolume}
       />
 
