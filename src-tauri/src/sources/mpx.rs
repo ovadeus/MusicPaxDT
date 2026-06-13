@@ -33,10 +33,18 @@ pub struct ImportPlaylist {
 
 // --- raw JSON shapes (current plain-JSON format) --------------------------
 
+/// Accepts both export shapes:
+///   • nested:  { "playlist": { name, description }, "tracks": [...] }
+///   • flat:    { name, description, "items": [...] }   ← current real export
 #[derive(Deserialize)]
 struct RawFile {
+    // nested shape
     playlist: Option<RawPlaylist>,
     tracks: Option<Vec<RawItem>>,
+    // flat shape (playlist fields at the root, tracks under "items")
+    name: Option<String>,
+    description: Option<String>,
+    items: Option<Vec<RawItem>>,
 }
 
 #[derive(Deserialize)]
@@ -130,13 +138,24 @@ pub fn parse_mpx(bytes: &[u8]) -> Result<ImportPlaylist, String> {
     let raw: RawFile = serde_json::from_slice(bytes)
         .map_err(|e| format!("not a valid .mpx (JSON parse failed): {e}"))?;
 
-    let playlist = raw
-        .playlist
-        .ok_or("invalid .mpx: missing the \"playlist\" object")?;
-    let name = clean(playlist.name).unwrap_or_else(|| "Imported playlist".to_string());
+    // Name/description: prefer the nested playlist object, fall back to root.
+    let (raw_name, raw_desc) = match raw.playlist {
+        Some(p) => (p.name, p.description),
+        None => (raw.name, raw.description),
+    };
+    // Tracks: "tracks" (nested shape) or "items" (flat shape).
+    let raw_items = raw.tracks.or(raw.items);
+
+    // Require at least a name or a track array — otherwise it's not an .mpx.
+    if raw_name.is_none() && raw_items.is_none() {
+        return Err(
+            "invalid .mpx: expected a playlist with a \"tracks\"/\"items\" array".into(),
+        );
+    }
+    let name = clean(raw_name).unwrap_or_else(|| "Imported playlist".to_string());
 
     let mut warnings = Vec::new();
-    let mut tracks: Vec<ImportTrack> = match raw.tracks {
+    let mut tracks: Vec<ImportTrack> = match raw_items {
         Some(items) if !items.is_empty() => items
             .into_iter()
             .filter_map(|item| item.media.map(|m| normalize_media(item.position, m)))
@@ -151,7 +170,7 @@ pub fn parse_mpx(bytes: &[u8]) -> Result<ImportPlaylist, String> {
 
     Ok(ImportPlaylist {
         name,
-        description: clean(playlist.description),
+        description: clean(raw_desc),
         tracks,
         warnings,
     })
@@ -247,6 +266,33 @@ mod tests {
     }
 
     #[test]
+    fn parses_flat_shape_with_items() {
+        // The current real export: playlist fields at root, tracks under "items".
+        let json = r#"{
+          "id": 7, "name": "1972 Top 100", "description": "hits",
+          "isPublic": true, "playlistUrl": null,
+          "items": [
+            { "id": 1, "playlistId": 7, "mediaId": 9, "position": 1, "dateAdded": "x",
+              "media": { "title": "Song A", "artist": "Artist A",
+                         "sourceUrl": "https://www.youtube.com/watch?v=qk-T9rRBTEU",
+                         "sourceType": "youtube", "thumbnail": "https://t/a.jpg",
+                         "duration": 323, "year": null } }
+          ]
+        }"#;
+        let p = parse_mpx(json.as_bytes()).expect("flat parse");
+        assert_eq!(p.name, "1972 Top 100");
+        assert_eq!(p.description.as_deref(), Some("hits"));
+        assert_eq!(p.tracks.len(), 1);
+        assert_eq!(p.tracks[0].title.as_deref(), Some("Song A"));
+        assert_eq!(
+            p.tracks[0].url.as_deref(),
+            Some("https://www.youtube.com/watch?v=qk-T9rRBTEU")
+        );
+        assert_eq!(p.tracks[0].cover.as_deref(), Some("https://t/a.jpg"));
+        assert_eq!(p.tracks[0].duration_ms, Some(323_000));
+    }
+
+    #[test]
     fn empty_tracks_warns_not_errors() {
         let p = parse_mpx(br#"{"playlist":{"name":"Empty"},"tracks":[]}"#).unwrap();
         assert_eq!(p.name, "Empty");
@@ -264,6 +310,7 @@ mod tests {
     #[test]
     fn malformed_json_errors() {
         assert!(parse_mpx(b"not json").is_err());
-        assert!(parse_mpx(br#"{"tracks":[]}"#).unwrap_err().contains("playlist"));
+        // No name and no tracks/items array → not a playlist file.
+        assert!(parse_mpx(br#"{"foo":1}"#).is_err());
     }
 }
