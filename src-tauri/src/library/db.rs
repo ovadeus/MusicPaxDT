@@ -232,6 +232,72 @@ pub fn get_track_by_uri(conn: &Connection, uri: &str) -> AppResult<Option<Track>
         .optional()?)
 }
 
+// ---------------------------------------------------------------------------
+// Playlists: the "building" layer — local OWNED files and STREAM_PLAYABLE
+// entries live side by side in the same list.
+// ---------------------------------------------------------------------------
+
+pub fn create_playlist(conn: &Connection, name: &str) -> AppResult<i64> {
+    conn.execute(
+        "INSERT INTO playlists(name, type) VALUES (?1, 'manual')",
+        [name],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn list_playlists(conn: &Connection) -> AppResult<Vec<crate::library::model::PlaylistInfo>> {
+    let mut stmt = conn.prepare(
+        "SELECT p.id, p.name, COUNT(pi.track_id)
+         FROM playlists p
+         LEFT JOIN playlist_items pi ON pi.playlist_id = p.id
+         GROUP BY p.id, p.name
+         ORDER BY p.id",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(crate::library::model::PlaylistInfo {
+            id: r.get(0)?,
+            name: r.get(1)?,
+            track_count: r.get(2)?,
+        })
+    })?;
+    let mut playlists = Vec::new();
+    for row in rows {
+        playlists.push(row?);
+    }
+    Ok(playlists)
+}
+
+pub fn playlist_tracks(conn: &Connection, playlist_id: i64) -> AppResult<Vec<Track>> {
+    let mut stmt = conn.prepare(
+        "SELECT t.* FROM tracks t
+         JOIN playlist_items pi ON pi.track_id = t.id
+         WHERE pi.playlist_id = ?1
+         ORDER BY pi.position",
+    )?;
+    let rows = stmt.query_map([playlist_id], track_from_row)?;
+    let mut tracks = Vec::new();
+    for row in rows {
+        tracks.push(row?);
+    }
+    Ok(tracks)
+}
+
+pub fn add_to_playlist(conn: &Connection, playlist_id: i64, track_id: i64) -> AppResult<()> {
+    conn.execute(
+        "INSERT INTO playlist_items(playlist_id, track_id, position)
+         SELECT ?1, ?2, COALESCE(MAX(position), 0) + 1
+         FROM playlist_items WHERE playlist_id = ?1",
+        params![playlist_id, track_id],
+    )?;
+    Ok(())
+}
+
+pub fn delete_playlist(conn: &Connection, playlist_id: i64) -> AppResult<()> {
+    conn.execute("DELETE FROM playlist_items WHERE playlist_id = ?1", [playlist_id])?;
+    conn.execute("DELETE FROM playlists WHERE id = ?1", [playlist_id])?;
+    Ok(())
+}
+
 /// Record a successful load: bump play_count and append to history.
 pub fn record_play(conn: &Connection, track_id: i64, played_at: i64) -> AppResult<()> {
     conn.execute(
@@ -326,6 +392,35 @@ mod tests {
         // unknown field falls back instead of injecting SQL
         let fallback = list_tracks(&conn, None, Some("evil; DROP TABLE tracks:asc"), 100, 0);
         assert!(fallback.is_ok());
+    }
+
+    #[test]
+    fn playlists_mix_owned_and_stream_tracks() {
+        let conn = mem_db();
+        insert_track(&conn, &new_track("Kashmir", "Led Zeppelin", "/m/kashmir.flac"), 1).unwrap();
+        let mut stream = new_track("Kashmir", "Led Zeppelin", "https://www.youtube.com/watch?v=abcdefghijk");
+        stream.capability = Capability::StreamPlayable;
+        stream.source_kind = "youtube".into();
+        insert_track(&conn, &stream, 2).unwrap();
+
+        let pid = create_playlist(&conn, "Mixed").unwrap();
+        let all = list_tracks(&conn, None, Some("added_at:asc"), 10, 0).unwrap();
+        add_to_playlist(&conn, pid, all[0].id).unwrap();
+        add_to_playlist(&conn, pid, all[1].id).unwrap();
+
+        let lists = list_playlists(&conn).unwrap();
+        assert_eq!(lists.len(), 1);
+        assert_eq!(lists[0].track_count, 2);
+
+        let items = playlist_tracks(&conn, pid).unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].capability, Capability::Owned);
+        assert_eq!(items[1].capability, Capability::StreamPlayable);
+
+        delete_playlist(&conn, pid).unwrap();
+        assert!(list_playlists(&conn).unwrap().is_empty());
+        // tracks survive playlist deletion
+        assert_eq!(list_tracks(&conn, None, None, 10, 0).unwrap().len(), 2);
     }
 
     #[test]

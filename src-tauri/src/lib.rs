@@ -49,6 +49,16 @@ pub fn run() {
             commands::get_settings,
             commands::set_setting,
             commands::recording_format_label,
+            commands::streams::integration_status,
+            commands::streams::set_youtube_api_key,
+            commands::streams::set_spotify_credentials,
+            commands::streams::import_stream_url,
+            commands::streams::mirror_playlist,
+            commands::streams::list_playlists,
+            commands::streams::create_playlist,
+            commands::streams::playlist_tracks,
+            commands::streams::add_to_playlist,
+            commands::streams::delete_playlist,
         ])
         .build(tauri::generate_context!());
 

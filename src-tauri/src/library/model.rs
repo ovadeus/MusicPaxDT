@@ -72,6 +72,14 @@ pub struct NewTrack {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PlaylistInfo {
+    pub id: i64,
+    pub name: String,
+    pub track_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ImportResult {
     pub imported: u32,
     pub skipped: u32,
