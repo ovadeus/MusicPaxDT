@@ -62,6 +62,11 @@ thiserror.
       plugin SDK, theme marketplace.
 
 ## Build notes
+- Every new #[tauri::command] MUST also be listed in
+  src-tauri/permissions/default.toml. The release UI is served from
+  http://localhost (YouTube embeds need an HTTP referrer), which Tauri's ACL
+  treats as remote — unlisted commands fail with "not allowed. Plugin not
+  found".
 - Cargo.lock pins transitive `time` to 0.3.47. time 0.3.48 (2026-06-12) breaks
   tauri-utils/cookie with E0119 coherence errors on stable Rust. If a lockfile
   regen breaks the build there: `cargo update time --precise 0.3.47`.
