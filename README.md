@@ -30,6 +30,7 @@ capture from other apps, no downloaders.
 - **Frontend:** React + TypeScript + Vite (strict mode; all IPC through `src/lib/ipc.ts`)
 - **Audio I/O:** [cpal](https://crates.io/crates/cpal) · **Decode:** [symphonia](https://crates.io/crates/symphonia) · **Resample:** [rubato](https://crates.io/crates/rubato) · **RT buffer:** [rtrb](https://crates.io/crates/rtrb)
 - **Tags:** [lofty](https://crates.io/crates/lofty) · **DB:** [rusqlite](https://crates.io/crates/rusqlite) (bundled SQLite + FTS5)
+- **Recording encoders:** [mp3lame-encoder](https://crates.io/crates/mp3lame-encoder) (LAME, LGPL) · [flacenc](https://crates.io/crates/flacenc) (pure Rust)
 
 The realtime audio callback is allocation-free and lock-free: a decode thread
 feeds f32 PCM through an rtrb ring buffer; the callback only pops samples and
@@ -94,8 +95,15 @@ by file path. Double-click a track to play it.
 - ✅ Source routing: each receiver input remembers its capture device
   (persisted in settings)
 - ✅ Recording: the post-DSP, pre-volume signal is teed to a recorder thread
-  writing float32 WAV at the input's native rate; stopping inserts the file
-  into the library as an OWNED `line_in` track
+  at the input's native rate; stopping inserts the file into the library as
+  an OWNED `line_in` track
+- ✅ Recording formats (Settings → Recording): **MP3** (128–320 kbps CBR, via
+  LAME), **WAV** (16/24-bit PCM or 32-bit float), **AIFF** (16/24-bit), and
+  **FLAC** (16/24-bit). Notes: MP3 takes inputs up to 48 kHz; FLAC encodes
+  when you stop, so it suits takes up to roughly a vinyl side
+- ✅ Settings area (gear icon): app-wide key-value settings persisted in the
+  library DB — recording format/quality now, more sections in later
+  milestones
 - ✅ VU meters, transport, and volume work identically for live input
 
 Later milestones: internet radio, DJ decks & mixer, YouTube embeds (official
