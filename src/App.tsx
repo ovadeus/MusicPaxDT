@@ -664,6 +664,7 @@ export default function App() {
           stream ? setStreamSeek(ms) : ipc.seek(ms).catch((e) => showStatus(`${e}`))
         }
         onVolume={handleVolume}
+        vuSynthetic={stream != null}
       />
 
       {settingsOpen && (

@@ -16,6 +16,8 @@ interface Props {
   onStop: () => void;
   onSeek: (ms: number) => void;
   onVolume: (level: number) => void;
+  /// VU meter is synthesized for sandboxed stream lanes (YouTube/radio).
+  vuSynthetic?: boolean;
 }
 
 export default function NowPlayingBar(props: Props) {
@@ -30,6 +32,7 @@ export default function NowPlayingBar(props: Props) {
     onStop,
     onSeek,
     onVolume,
+    vuSynthetic = false,
   } = props;
   const durationMs = track?.durationMs ?? 0;
 
@@ -116,7 +119,7 @@ export default function NowPlayingBar(props: Props) {
         />
       </div>
 
-      <VuMeter />
+      <VuMeter synthetic={vuSynthetic} active={state === "playing"} />
     </footer>
   );
 }

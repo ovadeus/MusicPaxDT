@@ -7,11 +7,24 @@ const BAR_H = 14;
 const DECAY_PER_FRAME = 0.92; // smooth fall-back
 const PEAK_HOLD_FRAMES = 30;
 
+interface Props {
+  /// Stream lanes (YouTube/radio) can't be metered for real — their audio is
+  /// sandboxed — so animate a synthesized level while they play.
+  synthetic?: boolean;
+  /// Whether sound is currently playing (drives the synthetic animation).
+  active?: boolean;
+}
+
 interface Channel {
   rms: number;
   peak: number;
   peakHold: number;
   holdFrames: number;
+}
+
+interface Synth {
+  value: number;
+  target: number;
 }
 
 // Map linear amplitude to meter travel; sqrt gives a useful visual range
@@ -20,12 +33,19 @@ function travel(v: number): number {
   return Math.min(1, Math.sqrt(Math.max(0, v)));
 }
 
-export default function VuMeter() {
+export default function VuMeter({ synthetic = false, active = false }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const channels = useRef<[Channel, Channel]>([
     { rms: 0, peak: 0, peakHold: 0, holdFrames: 0 },
     { rms: 0, peak: 0, peakHold: 0, holdFrames: 0 },
   ]);
+  const synth = useRef<[Synth, Synth]>([
+    { value: 0, target: 0 },
+    { value: 0, target: 0 },
+  ]);
+  // Keep the latest mode flags visible to the rAF loop without re-binding it.
+  const modeRef = useRef({ synthetic, active });
+  modeRef.current = { synthetic, active };
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -33,6 +53,7 @@ export default function VuMeter() {
     let disposed = false;
 
     onVuLevels((levels) => {
+      if (modeRef.current.synthetic) return; // streams use the synth, not engine events
       const [l, r] = channels.current;
       l.rms = Math.max(l.rms, levels.rmsL);
       l.peak = Math.max(l.peak, levels.peakL);
@@ -43,12 +64,26 @@ export default function VuMeter() {
       else unlisten = fn;
     });
 
+    // A plausible, musical-looking level: each channel wanders toward a new
+    // random target now and then, with light per-frame jitter.
+    const feedSynth = (i: number) => {
+      const s = synth.current[i];
+      if (Math.random() < 0.09) s.target = 0.4 + Math.random() * 0.55;
+      s.value += (s.target - s.value) * 0.28;
+      const v = Math.max(0, Math.min(1, s.value + (Math.random() - 0.5) * 0.12));
+      const ch = channels.current[i];
+      ch.peak = Math.max(ch.peak, v);
+      ch.rms = Math.max(ch.rms, v * 0.72);
+    };
+
     const draw = () => {
+      const { synthetic: syn, active: act } = modeRef.current;
       const canvas = canvasRef.current;
       const ctx = canvas?.getContext("2d");
       if (canvas && ctx) {
         ctx.clearRect(0, 0, WIDTH, HEIGHT);
         channels.current.forEach((ch, i) => {
+          if (syn && act) feedSynth(i);
           const y = i === 0 ? 4 : HEIGHT - BAR_H - 4;
           drawBar(ctx, y, ch);
           ch.rms *= DECAY_PER_FRAME;
@@ -112,7 +147,7 @@ export default function VuMeter() {
       className="vu-meter"
       width={WIDTH}
       height={HEIGHT}
-      title="Output level (peak / RMS)"
+      title="Output level"
     />
   );
 }
