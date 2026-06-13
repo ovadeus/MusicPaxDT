@@ -9,6 +9,7 @@ interface Props {
   view: LibraryView;
   curator: boolean;
   onSelect: (view: LibraryView) => void;
+  onPlayPlaylist: (id: number, name: string) => void;
   onCreate: (name: string) => void;
   onDelete: (id: number) => void;
 }
@@ -21,6 +22,7 @@ export default function PlaylistSidebar({
   view,
   curator,
   onSelect,
+  onPlayPlaylist,
   onCreate,
   onDelete,
 }: Props) {
@@ -78,6 +80,8 @@ export default function PlaylistSidebar({
             view.kind === "playlist" && view.id === p.id ? " active" : ""
           }`}
           onClick={() => onSelect({ kind: "playlist", id: p.id, name: p.name })}
+          onDoubleClick={() => onPlayPlaylist(p.id, p.name)}
+          title="Double-click to play"
         >
           <span className="sidebar-name" title={p.name}>
             {p.name}

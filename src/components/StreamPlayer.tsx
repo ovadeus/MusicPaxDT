@@ -37,6 +37,11 @@ export default function StreamPlayer(props: Props) {
   cbRef.current = props;
 
   const videoId = videoIdFrom(track.uri);
+  // The iframe is created once with the first video and never reloaded;
+  // subsequent tracks are swapped in via loadVideoById so the API connection
+  // (and the all-important "ended" events) survive across a playlist.
+  const initialVideoRef = useRef(videoId);
+  const loadedRef = useRef<string | null>(videoId);
 
   const post = (func: string, args: unknown[] = []) => {
     iframeRef.current?.contentWindow?.postMessage(
@@ -45,8 +50,9 @@ export default function StreamPlayer(props: Props) {
     );
   };
 
+  // Mount once: a persistent message listener + handshake. Not keyed on the
+  // video, so switching tracks never tears the API connection down.
   useEffect(() => {
-    readyRef.current = false;
     const onMessage = (e: MessageEvent) => {
       if (typeof e.data !== "string" || !e.origin.includes("youtube")) return;
       let data: { event?: string; info?: unknown };
@@ -57,9 +63,13 @@ export default function StreamPlayer(props: Props) {
       }
       if (!readyRef.current) {
         readyRef.current = true;
-        // Push initial volume and desired transport state once the player talks.
         post("setVolume", [Math.round(cbRef.current.volume * 100)]);
-        if (cbRef.current.playing) post("playVideo");
+        // If the track changed before the player was ready, load it now.
+        if (loadedRef.current && loadedRef.current !== initialVideoRef.current) {
+          post("loadVideoById", [loadedRef.current]);
+        } else if (cbRef.current.playing) {
+          post("playVideo");
+        }
       }
       if (data.event === "onStateChange" && typeof data.info === "number") {
         if (data.info === 0) cbRef.current.onEnded();
@@ -77,7 +87,6 @@ export default function StreamPlayer(props: Props) {
     };
     window.addEventListener("message", onMessage);
 
-    // Handshake until the player responds (it then streams events to us).
     const handshake = window.setInterval(() => {
       if (readyRef.current) {
         window.clearInterval(handshake);
@@ -88,16 +97,20 @@ export default function StreamPlayer(props: Props) {
         "*",
       );
     }, 300);
-    const stopHandshake = window.setTimeout(
-      () => window.clearInterval(handshake),
-      12_000,
-    );
+    const stopHandshake = window.setTimeout(() => window.clearInterval(handshake), 12_000);
 
     return () => {
       window.removeEventListener("message", onMessage);
       window.clearInterval(handshake);
       window.clearTimeout(stopHandshake);
     };
+  }, []);
+
+  // Track changed → swap the video in place (no iframe reload).
+  useEffect(() => {
+    if (!videoId || loadedRef.current === videoId) return;
+    loadedRef.current = videoId;
+    if (readyRef.current) post("loadVideoById", [videoId]);
   }, [videoId]);
 
   // Transport / volume / seek bridges.
@@ -159,7 +172,7 @@ export default function StreamPlayer(props: Props) {
         title="YouTube player"
         width="384"
         height="216"
-        src={`https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&enablejsapi=1`}
+        src={`https://www.youtube-nocookie.com/embed/${initialVideoRef.current}?autoplay=1&enablejsapi=1&playsinline=1&origin=${encodeURIComponent(window.location.origin)}`}
         frameBorder="0"
         allow="autoplay; encrypted-media; picture-in-picture"
         allowFullScreen

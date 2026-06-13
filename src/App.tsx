@@ -246,6 +246,24 @@ export default function App() {
     [playTrack],
   );
 
+  // Double-click a playlist → play it from the first track.
+  const playPlaylist = useCallback(
+    async (id: number, name: string) => {
+      try {
+        const ts = await ipc.playlistTracks(id);
+        setView({ kind: "playlist", id, name });
+        if (ts.length === 0) {
+          showStatus(`“${name}” is empty`);
+          return;
+        }
+        await playTrack(ts[0]);
+      } catch (e) {
+        showStatus(`${e}`);
+      }
+    },
+    [playTrack, showStatus],
+  );
+
   // Natural end of an OWNED track → advance.
   const prevPlayState = useRef<PlaybackState>("stopped");
   useEffect(() => {
@@ -508,6 +526,7 @@ export default function App() {
             view={view}
             curator={curator}
             onSelect={setView}
+            onPlayPlaylist={playPlaylist}
             onCreate={(name) => {
               ipc
                 .createPlaylist(name)
