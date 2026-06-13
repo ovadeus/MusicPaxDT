@@ -258,6 +258,22 @@ pub fn set_setting(conn: &Connection, key: &str, value: &str) -> AppResult<()> {
     Ok(())
 }
 
+pub fn set_track_musicbrainz_id(conn: &Connection, id: i64, mbid: &str) -> AppResult<()> {
+    conn.execute(
+        "UPDATE tracks SET musicbrainz_id = ?1 WHERE id = ?2",
+        params![mbid, id],
+    )?;
+    Ok(())
+}
+
+pub fn set_track_art_path(conn: &Connection, id: i64, art_path: &str) -> AppResult<()> {
+    conn.execute(
+        "UPDATE tracks SET art_path = ?1 WHERE id = ?2",
+        params![art_path, id],
+    )?;
+    Ok(())
+}
+
 pub fn get_track_by_uri(conn: &Connection, uri: &str) -> AppResult<Option<Track>> {
     Ok(conn
         .query_row("SELECT * FROM tracks WHERE uri = ?1", [uri], track_from_row)

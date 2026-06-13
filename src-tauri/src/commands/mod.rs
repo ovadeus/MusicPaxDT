@@ -1,3 +1,4 @@
+pub mod enrich;
 pub mod streams;
 
 use std::collections::HashMap;

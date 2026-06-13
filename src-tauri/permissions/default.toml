@@ -40,4 +40,11 @@ commands.allow = [
     "playlist_tracks",
     "add_to_playlist",
     "delete_playlist",
+    "enrich_integration_status",
+    "set_acoustid_key",
+    "set_anthropic_key",
+    "set_openai_key",
+    "enrich_track",
+    "enrich_tracks",
+    "enrich_cost_estimate",
 ]
