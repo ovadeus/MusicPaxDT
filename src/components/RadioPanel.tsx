@@ -248,13 +248,15 @@ export default function RadioPanel({
                     .join(" · ")}
                 </div>
               </div>
-              <button
-                className="radio-fav"
-                title="Rename / set thumbnail"
-                onClick={() => openEditor(s)}
-              >
-                <Pencil size={13} />
-              </button>
+              {curator && (
+                <button
+                  className="radio-fav"
+                  title="Rename / set thumbnail"
+                  onClick={() => openEditor(s)}
+                >
+                  <Pencil size={13} />
+                </button>
+              )}
               <button
                 className={`radio-fav${fav ? " on" : ""}`}
                 title={fav ? "Remove from favorites" : "Add to favorites"}
