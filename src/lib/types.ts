@@ -99,6 +99,48 @@ export interface IntegrationStatus {
   spotifyCredentials: boolean;
 }
 
+export interface EnrichIntegrationStatus {
+  acoustidKey: boolean;
+  anthropicKey: boolean;
+  openaiKey: boolean;
+  fpcalcFound: boolean;
+  fpcalcPath: string | null;
+}
+
+export interface MetadataSuggestion {
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  year: number | null;
+  genre: string | null;
+  artUrl: string | null;
+  musicbrainzId: string | null;
+  source: string;
+  confidence: number;
+}
+
+export interface EnrichResult {
+  track: Track;
+  suggestion: MetadataSuggestion | null;
+  applied: boolean;
+}
+
+export interface EnrichProgress {
+  done: number;
+  total: number;
+  matched: number;
+  spentUsd: number;
+  current: string;
+  capped: boolean;
+}
+
+export interface EnrichBatchReport {
+  total: number;
+  matched: number;
+  spentUsd: number;
+  capped: boolean;
+}
+
 export type SortField =
   | "title"
   | "artist"

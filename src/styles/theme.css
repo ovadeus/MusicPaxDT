@@ -674,8 +674,35 @@ button svg,
 }
 
 .add-col {
-  width: 90px;
+  width: 120px;
   text-align: center;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.row-edit.spinning svg {
+  animation: spin 1s linear infinite;
+}
+
+.enrich-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.enrich-banner {
+  padding: 8px 16px;
+  background: var(--accent-soft);
+  border-bottom: 1px solid var(--border);
+}
+
+.integration-status {
+  font-size: 12px;
+  word-break: break-all;
 }
 
 .row-actions {

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Settings as SettingsIcon } from "lucide-react";
+import { Settings as SettingsIcon, Sparkles } from "lucide-react";
 import AddUrlModal from "./components/AddUrlModal";
 import TrackEditModal from "./components/TrackEditModal";
 import LibraryTable from "./components/LibraryTable";
@@ -48,6 +48,15 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [addUrlOpen, setAddUrlOpen] = useState(false);
   const [editTrack, setEditTrack] = useState<Track | null>(null);
+  const [enrichingId, setEnrichingId] = useState<number | null>(null);
+  const [enrichProgress, setEnrichProgress] = useState<{
+    done: number;
+    total: number;
+    matched: number;
+    spentUsd: number;
+    current: string;
+    capped: boolean;
+  } | null>(null);
   const [formatLabel, setFormatLabel] = useState("");
   const [stream, setStream] = useState<Track | null>(null);
   const [streamPlaying, setStreamPlaying] = useState(true);
@@ -104,11 +113,63 @@ export default function App() {
       ipc.onPosition(setPositionMs),
       ipc.onPlaybackState(setPlayState),
       ipc.onRecordingState(setRecState),
+      ipc.onEnrichProgress(setEnrichProgress),
     ];
     return () => {
       subs.forEach((p) => p.then((un) => un()));
     };
   }, [showStatus, refreshPlaylists]);
+
+  const handleEnrichTrack = async (track: Track) => {
+    setEnrichingId(track.id);
+    try {
+      const result = await ipc.enrichTrack(track.id);
+      if (result.applied && result.suggestion) {
+        showStatus(
+          `Updated “${result.track.title ?? "track"}” from ${result.suggestion.source}`,
+        );
+        await refreshTracks();
+      } else {
+        showStatus(`No confident match found for “${track.title ?? "track"}”`);
+      }
+    } catch (e) {
+      showStatus(`${e}`);
+    } finally {
+      setEnrichingId(null);
+    }
+  };
+
+  const handleEnrichAll = async () => {
+    if (tracks.length === 0) return;
+    const ids = tracks.map((t) => t.id);
+    try {
+      const est = await ipc.enrichCostEstimate(ids.length);
+      if (est > 0) {
+        const ok = window.confirm(
+          `Enrich ${ids.length} track(s)?\n\nEstimated AI cost if every track needs the LLM: $${est.toFixed(2)} (capped in Settings). Free MusicBrainz/fingerprint matches cost nothing.`,
+        );
+        if (!ok) return;
+      }
+      setEnrichProgress({
+        done: 0,
+        total: ids.length,
+        matched: 0,
+        spentUsd: 0,
+        current: "",
+        capped: false,
+      });
+      const report = await ipc.enrichTracks(ids);
+      const cap = report.capped ? " (spend cap reached)" : "";
+      showStatus(
+        `Enriched ${report.matched}/${report.total} — AI spend $${report.spentUsd.toFixed(2)}${cap}`,
+      );
+      await refreshTracks();
+    } catch (e) {
+      showStatus(`${e}`);
+    } finally {
+      setEnrichProgress(null);
+    }
+  };
 
   // ----- playback routing (the capability gate, UI side) -------------------
 
@@ -287,6 +348,16 @@ export default function App() {
           >
             Add URL
           </button>
+          {source === "library" && (
+            <button
+              className="addurl-button enrich-all"
+              onClick={handleEnrichAll}
+              disabled={tracks.length === 0 || enrichProgress != null}
+              title="Auto-fill tags for the visible tracks (free MusicBrainz/fingerprint first, AI only if configured)"
+            >
+              <Sparkles size={14} /> Enrich
+            </button>
+          )}
           <button className="import-button" onClick={handleImport} disabled={busy}>
             {busy ? "Importing…" : "Import Folder"}
           </button>
@@ -301,6 +372,25 @@ export default function App() {
       </header>
 
       {status && <div className="status-banner">{status}</div>}
+
+      {enrichProgress && (
+        <div className="enrich-banner">
+          <div className="mirror-progress-bar">
+            <div
+              className="mirror-progress-fill"
+              style={{
+                width: `${enrichProgress.total ? (enrichProgress.done / enrichProgress.total) * 100 : 0}%`,
+              }}
+            />
+          </div>
+          <div className="mirror-progress-text">
+            Enriching {enrichProgress.done}/{enrichProgress.total} ·{" "}
+            {enrichProgress.matched} matched · AI ${enrichProgress.spentUsd.toFixed(2)}
+            {enrichProgress.capped ? " · cap reached (free tiers only)" : ""}
+            {enrichProgress.current ? ` · ${enrichProgress.current}` : ""}
+          </div>
+        </div>
+      )}
 
       {lineIn ? (
         <ReceiverPanel
@@ -350,6 +440,8 @@ export default function App() {
             onSortChange={setSort}
             onActivate={playTrack}
             onEdit={setEditTrack}
+            onEnrich={handleEnrichTrack}
+            enrichingId={enrichingId}
             nowPlayingId={
               stream ? stream.id : playState === "stopped" ? null : (now?.track.id ?? null)
             }

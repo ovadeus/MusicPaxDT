@@ -1,4 +1,12 @@
-import { Disc3, Flag, Link as LinkIcon, Pencil, RadioTower, SquarePlay } from "lucide-react";
+import {
+  Disc3,
+  Flag,
+  Link as LinkIcon,
+  Pencil,
+  RadioTower,
+  Sparkles,
+  SquarePlay,
+} from "lucide-react";
 import type { PlaylistInfo, SortField, SortSpec, Track } from "../lib/types";
 
 interface Props {
@@ -11,6 +19,8 @@ interface Props {
   onSortChange: (s: SortSpec) => void;
   onActivate: (track: Track) => void;
   onEdit: (track: Track) => void;
+  onEnrich: (track: Track) => void;
+  enrichingId: number | null;
   nowPlayingId: number | null;
   playlists: PlaylistInfo[];
   onAddToPlaylist: (playlistId: number, trackId: number) => void;
@@ -73,6 +83,8 @@ export default function LibraryTable(props: Props) {
     onSortChange,
     onActivate,
     onEdit,
+    onEnrich,
+    enrichingId,
     nowPlayingId,
     playlists,
     onAddToPlaylist,
@@ -153,6 +165,17 @@ export default function LibraryTable(props: Props) {
                     <td className="num">{formatDuration(t.durationMs)}</td>
                     <td className="add-col">
                       <div className="row-actions">
+                        <button
+                          className={`row-edit${enrichingId === t.id ? " spinning" : ""}`}
+                          title="Auto-fill tags (MusicBrainz / fingerprint / AI)"
+                          disabled={enrichingId != null}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onEnrich(t);
+                          }}
+                        >
+                          <Sparkles size={13} />
+                        </button>
                         <button
                           className="row-edit"
                           title="Edit title & tags"

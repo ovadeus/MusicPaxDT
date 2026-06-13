@@ -1,7 +1,14 @@
 import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import * as ipc from "../lib/ipc";
-import type { IntegrationStatus } from "../lib/types";
+import type { EnrichIntegrationStatus, IntegrationStatus } from "../lib/types";
+
+const AI_PROVIDERS = [
+  { value: "none", label: "None (free tiers only)" },
+  { value: "anthropic", label: "Anthropic (Claude)" },
+  { value: "openai", label: "OpenAI" },
+  { value: "ollama", label: "Ollama (local, free)" },
+];
 
 interface Props {
   onClose: () => void;
@@ -35,9 +42,15 @@ export default function SettingsPanel({ onClose, onError, onSaved }: Props) {
   const [values, setValues] = useState<Record<string, string>>({});
   const [loaded, setLoaded] = useState(false);
   const [integrations, setIntegrations] = useState<IntegrationStatus | null>(null);
+  const [enrich, setEnrich] = useState<EnrichIntegrationStatus | null>(null);
   const [ytKey, setYtKey] = useState("");
   const [spotifyId, setSpotifyId] = useState("");
   const [spotifySecret, setSpotifySecret] = useState("");
+  const [acoustidKey, setAcoustidKey] = useState("");
+  const [aiKey, setAiKey] = useState("");
+
+  const refreshEnrich = () =>
+    ipc.enrichIntegrationStatus().then(setEnrich).catch(() => {});
 
   useEffect(() => {
     ipc
@@ -48,7 +61,29 @@ export default function SettingsPanel({ onClose, onError, onSaved }: Props) {
       })
       .catch((e) => onError(`Failed to load settings: ${e}`));
     ipc.integrationStatus().then(setIntegrations).catch(() => {});
+    refreshEnrich();
   }, [onError]);
+
+  const saveAcoustid = async () => {
+    try {
+      await ipc.setAcoustidKey(acoustidKey);
+      setAcoustidKey("");
+      await refreshEnrich();
+    } catch (e) {
+      onError(`${e}`);
+    }
+  };
+
+  const saveAiKey = async (provider: string) => {
+    try {
+      if (provider === "anthropic") await ipc.setAnthropicKey(aiKey);
+      else if (provider === "openai") await ipc.setOpenaiKey(aiKey);
+      setAiKey("");
+      await refreshEnrich();
+    } catch (e) {
+      onError(`${e}`);
+    }
+  };
 
   const saveYoutubeKey = async () => {
     try {
@@ -84,6 +119,14 @@ export default function SettingsPanel({ onClose, onError, onSaved }: Props) {
   const format = values["recording.format"] ?? "wav";
   const bitDepth = values["recording.bit_depth"] ?? "32";
   const mp3Bitrate = values["recording.mp3_bitrate"] ?? "320";
+
+  const aiProvider = values["enrich.ai_provider"] ?? "none";
+  const aiModel = values["enrich.ai_model"] ?? "";
+  const spendCap = values["enrich.spend_cap_usd"] ?? "1.0";
+  const ollamaHost = values["enrich.ollama_host"] ?? "http://localhost:11434";
+  const aiKeyConfigured =
+    (aiProvider === "anthropic" && enrich?.anthropicKey) ||
+    (aiProvider === "openai" && enrich?.openaiKey);
 
   return (
     <div className="settings-overlay" onClick={onClose}>
@@ -218,6 +261,139 @@ export default function SettingsPanel({ onClose, onError, onSaved }: Props) {
                 Spotify credentials (free at developer.spotify.com) let Mirror
                 read public playlist track lists; a YouTube API key makes match
                 search more reliable than the built-in keyless fallback.
+              </p>
+            </section>
+
+            <section className="settings-section">
+              <h3>Metadata enrichment</h3>
+
+              <div className="integration-row">
+                <span>
+                  AcoustID API key{" "}
+                  <em className={enrich?.acoustidKey ? "ok" : ""}>
+                    {enrich?.acoustidKey ? "configured" : "not set"}
+                  </em>
+                </span>
+                <div className="integration-inputs">
+                  <input
+                    type="password"
+                    placeholder="Free key from acoustid.org"
+                    value={acoustidKey}
+                    onChange={(e) => setAcoustidKey(e.target.value)}
+                  />
+                  <button onClick={saveAcoustid} disabled={!acoustidKey.trim()}>
+                    Save
+                  </button>
+                </div>
+              </div>
+
+              <div className="settings-field">
+                <span>Fingerprint tool (fpcalc)</span>
+                <em className={enrich?.fpcalcFound ? "ok integration-status" : "integration-status"}>
+                  {enrich?.fpcalcFound
+                    ? `found: ${enrich.fpcalcPath}`
+                    : "not found — install Chromaprint or set a path below"}
+                </em>
+              </div>
+              <div className="integration-inputs">
+                <input
+                  type="text"
+                  placeholder="Optional: full path to fpcalc"
+                  defaultValue={values["enrich.fpcalc_path"] ?? ""}
+                  onBlur={(e) =>
+                    update("enrich.fpcalc_path", e.target.value).then(refreshEnrich)
+                  }
+                />
+              </div>
+
+              <label className="settings-field">
+                <span>AI provider (for messy-title cleanup)</span>
+                <select
+                  value={aiProvider}
+                  onChange={(e) => update("enrich.ai_provider", e.target.value)}
+                >
+                  {AI_PROVIDERS.map((p) => (
+                    <option key={p.value} value={p.value}>
+                      {p.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              {aiProvider !== "none" && (
+                <label className="settings-field">
+                  <span>Model</span>
+                  <input
+                    type="text"
+                    placeholder={
+                      aiProvider === "anthropic"
+                        ? "claude-opus-4-8"
+                        : aiProvider === "openai"
+                          ? "gpt-4o-mini"
+                          : "llama3"
+                    }
+                    defaultValue={aiModel}
+                    onBlur={(e) => update("enrich.ai_model", e.target.value)}
+                  />
+                </label>
+              )}
+
+              {(aiProvider === "anthropic" || aiProvider === "openai") && (
+                <div className="integration-row">
+                  <span>
+                    {aiProvider === "anthropic" ? "Anthropic" : "OpenAI"} API key{" "}
+                    <em className={aiKeyConfigured ? "ok" : ""}>
+                      {aiKeyConfigured ? "configured" : "not set"}
+                    </em>
+                  </span>
+                  <div className="integration-inputs">
+                    <input
+                      type="password"
+                      placeholder="Paste API key"
+                      value={aiKey}
+                      onChange={(e) => setAiKey(e.target.value)}
+                    />
+                    <button onClick={() => saveAiKey(aiProvider)} disabled={!aiKey.trim()}>
+                      Save
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {aiProvider === "ollama" && (
+                <label className="settings-field">
+                  <span>Ollama host</span>
+                  <input
+                    type="text"
+                    defaultValue={ollamaHost}
+                    onBlur={(e) => update("enrich.ollama_host", e.target.value)}
+                  />
+                </label>
+              )}
+
+              {aiProvider !== "none" && aiProvider !== "ollama" && (
+                <label className="settings-field">
+                  <span>AI spend cap per batch (USD)</span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    defaultValue={spendCap}
+                    onBlur={(e) =>
+                      update(
+                        "enrich.spend_cap_usd",
+                        e.target.value.replace(/[^0-9.]/g, "") || "1.0",
+                      )
+                    }
+                  />
+                </label>
+              )}
+
+              <p className="settings-hint">
+                Enrich always tries free MusicBrainz first, then AcoustID
+                fingerprinting for local files (needs the free key + fpcalc),
+                and only then the AI — whose cleaned guess is re-checked against
+                MusicBrainz. The spend cap stops paid calls mid-batch; free
+                tiers keep running. Ollama runs locally and costs nothing.
               </p>
             </section>
           </>

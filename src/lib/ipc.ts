@@ -6,6 +6,10 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AudioDevice,
   EngineStatus,
+  EnrichBatchReport,
+  EnrichIntegrationStatus,
+  EnrichProgress,
+  EnrichResult,
   ImportResult,
   IntegrationStatus,
   LineInSource,
@@ -142,6 +146,42 @@ export function setSetting(key: string, value: string): Promise<void> {
 
 export function recordingFormatLabel(): Promise<string> {
   return invoke<string>("recording_format_label");
+}
+
+// --- metadata enrichment ---------------------------------------------------
+
+export function enrichIntegrationStatus(): Promise<EnrichIntegrationStatus> {
+  return invoke<EnrichIntegrationStatus>("enrich_integration_status");
+}
+
+export function setAcoustidKey(key: string): Promise<void> {
+  return invoke<void>("set_acoustid_key", { key });
+}
+
+export function setAnthropicKey(key: string): Promise<void> {
+  return invoke<void>("set_anthropic_key", { key });
+}
+
+export function setOpenaiKey(key: string): Promise<void> {
+  return invoke<void>("set_openai_key", { key });
+}
+
+export function enrichTrack(trackId: number): Promise<EnrichResult> {
+  return invoke<EnrichResult>("enrich_track", { trackId });
+}
+
+export function enrichTracks(trackIds: number[]): Promise<EnrichBatchReport> {
+  return invoke<EnrichBatchReport>("enrich_tracks", { trackIds });
+}
+
+export function enrichCostEstimate(count: number): Promise<number> {
+  return invoke<number>("enrich_cost_estimate", { count });
+}
+
+export function onEnrichProgress(
+  cb: (p: EnrichProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<EnrichProgress>("enrich-progress", (e) => cb(e.payload));
 }
 
 // --- streams, mirror, playlists -------------------------------------------
