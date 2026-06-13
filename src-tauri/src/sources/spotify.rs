@@ -153,6 +153,74 @@ pub async fn playlist_tracks(
     Ok((name, tracks))
 }
 
+/// No-credentials path: read the track list straight from the public embed
+/// page (the same JSON Spotify's own embed player renders). Metadata only.
+/// The page exposes roughly the first 50–100 tracks; the official API path
+/// (with credentials) has no such cap.
+pub async fn playlist_tracks_public(
+    client: &reqwest::Client,
+    playlist_id: &str,
+) -> Result<(String, Vec<ListedTrack>), String> {
+    let html = client
+        .get(format!("https://open.spotify.com/embed/playlist/{playlist_id}"))
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        )
+        .send()
+        .await
+        .map_err(|e| format!("Spotify page request failed: {e}"))?
+        .text()
+        .await
+        .map_err(|e| format!("Spotify page read failed: {e}"))?;
+
+    let json = extract_next_data(&html).ok_or_else(|| {
+        "could not read the playlist page (is it public?) — paste the track list as text instead"
+            .to_string()
+    })?;
+    let value: serde_json::Value = serde_json::from_str(json)
+        .map_err(|e| format!("Spotify page JSON parse failed: {e}"))?;
+
+    let entity = value
+        .pointer("/props/pageProps/state/data/entity")
+        .ok_or("Spotify page layout changed — paste the track list as text instead")?;
+    let name = entity
+        .get("title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Spotify playlist")
+        .to_string();
+    let track_list = entity
+        .get("trackList")
+        .and_then(|v| v.as_array())
+        .ok_or("no track list on the playlist page — is the playlist public?")?;
+
+    let tracks: Vec<ListedTrack> = track_list
+        .iter()
+        .filter_map(|t| {
+            Some(ListedTrack {
+                title: t.get("title")?.as_str()?.to_string(),
+                artist: t
+                    .get("subtitle")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                duration_ms: t.get("duration").and_then(|v| v.as_u64()),
+            })
+        })
+        .collect();
+    if tracks.is_empty() {
+        return Err("the playlist page contained no readable tracks".into());
+    }
+    Ok((name, tracks))
+}
+
+fn extract_next_data(html: &str) -> Option<&str> {
+    let start_tag = html.find("id=\"__NEXT_DATA__\"")?;
+    let json_start = html[start_tag..].find('>')? + start_tag + 1;
+    let json_end = html[json_start..].find("</script>")? + json_start;
+    Some(&html[json_start..json_end])
+}
+
 /// Parse a pasted text list: "Artist - Title" lines, or Exportify-style CSV
 /// with "Track Name" / "Artist Name(s)" columns.
 pub fn parse_text_list(text: &str) -> Vec<ListedTrack> {
@@ -253,6 +321,24 @@ mod tests {
         assert_eq!(list[1].artist, "Pink Floyd");
         assert_eq!(list[2].artist, "");
         assert_eq!(list[2].title, "JustATitle");
+    }
+
+    /// Live network test of the no-credentials path against a public
+    /// Spotify editorial playlist. Run with --include-ignored.
+    #[tokio::test]
+    #[ignore = "requires network access"]
+    async fn public_playlist_scrape_works_live() {
+        let client = reqwest::Client::new();
+        let (name, tracks) = playlist_tracks_public(&client, "37i9dQZF1DXcBWIGoYBM5M")
+            .await
+            .expect("public playlist read");
+        assert!(!name.is_empty());
+        assert!(tracks.len() >= 20, "got {} tracks", tracks.len());
+        assert!(tracks.iter().all(|t| !t.title.is_empty()));
+        assert!(
+            tracks.iter().filter(|t| t.duration_ms.is_some()).count() > tracks.len() / 2,
+            "durations should mostly be present"
+        );
     }
 
     #[test]

@@ -102,9 +102,11 @@ export default function AddUrlModal({ onClose, onError, onDone }: Props) {
 
         <p className="settings-hint">
           Streams play through the official YouTube player (📡 STREAM PLAYABLE — no
-          EQ, no recording). Mirroring creates a playlist with the same name; add
-          your YouTube API key and Spotify credentials in Settings → Integrations
-          for the most reliable matching.
+          EQ, no recording). Mirroring creates a playlist with the same name and
+          works with no setup: public Spotify playlists are read straight from the
+          page (first ~100 tracks). Optional, in Settings → Integrations: Spotify
+          credentials for full-length playlists, a YouTube API key for the most
+          reliable matching.
         </p>
       </div>
     </div>

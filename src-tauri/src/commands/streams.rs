@@ -173,19 +173,23 @@ pub async fn mirror_playlist(
 ) -> AppResult<MirrorReport> {
     let (name, wanted) = match detect(&input) {
         DetectedInput::SpotifyPlaylist(id) => {
+            // Official API when credentials exist (no track cap); otherwise
+            // read the public playlist page directly — no account needed,
+            // it's only a track-list reference.
             let client_id = keyring_get("spotify_client_id");
             let client_secret = keyring_get("spotify_client_secret");
-            let (Some(client_id), Some(client_secret)) = (client_id, client_secret) else {
-                return Err(AppError::Other(
-                    "add your Spotify Client ID and Secret in Settings → Integrations first (free at developer.spotify.com), or paste the track list as text".into(),
-                ));
-            };
-            let token = spotify::access_token(http(), &client_id, &client_secret)
-                .await
-                .map_err(AppError::Other)?;
-            spotify::playlist_tracks(http(), &token, &id)
-                .await
-                .map_err(AppError::Other)?
+            if let (Some(client_id), Some(client_secret)) = (client_id, client_secret) {
+                let token = spotify::access_token(http(), &client_id, &client_secret)
+                    .await
+                    .map_err(AppError::Other)?;
+                spotify::playlist_tracks(http(), &token, &id)
+                    .await
+                    .map_err(AppError::Other)?
+            } else {
+                spotify::playlist_tracks_public(http(), &id)
+                    .await
+                    .map_err(AppError::Other)?
+            }
         }
         DetectedInput::TextList => {
             let list = spotify::parse_text_list(&input);
