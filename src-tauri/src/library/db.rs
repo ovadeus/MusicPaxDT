@@ -258,6 +258,21 @@ pub fn set_setting(conn: &Connection, key: &str, value: &str) -> AppResult<()> {
     Ok(())
 }
 
+/// Remove a track from the library: the row (FTS stays in sync via triggers),
+/// plus its playlist/cue/history references. Does NOT touch the audio file on
+/// disk — only the library entry.
+pub fn delete_track(conn: &Connection, id: i64) -> AppResult<()> {
+    conn.execute("DELETE FROM playlist_items WHERE track_id = ?1", [id])?;
+    conn.execute("DELETE FROM crate_items WHERE track_id = ?1", [id])?;
+    conn.execute("DELETE FROM cues WHERE track_id = ?1", [id])?;
+    conn.execute("DELETE FROM history WHERE track_id = ?1", [id])?;
+    let n = conn.execute("DELETE FROM tracks WHERE id = ?1", [id])?;
+    if n == 0 {
+        return Err(AppError::TrackNotFound(id));
+    }
+    Ok(())
+}
+
 pub fn set_track_musicbrainz_id(conn: &Connection, id: i64, mbid: &str) -> AppResult<()> {
     conn.execute(
         "UPDATE tracks SET musicbrainz_id = ?1 WHERE id = ?2",
@@ -504,6 +519,24 @@ mod tests {
 
         // Unknown id is an error.
         assert!(update_track_metadata(&conn, 9999, &edit).is_err());
+    }
+
+    #[test]
+    fn delete_track_removes_row_playlist_links_and_fts() {
+        let conn = mem_db();
+        insert_track(&conn, &new_track("Kashmir", "Led Zeppelin", "/m/k.flac"), 1).unwrap();
+        let id = list_tracks(&conn, None, None, 10, 0).unwrap()[0].id;
+        let pid = create_playlist(&conn, "P").unwrap();
+        add_to_playlist(&conn, pid, id).unwrap();
+
+        delete_track(&conn, id).unwrap();
+        assert!(list_tracks(&conn, None, None, 10, 0).unwrap().is_empty());
+        assert!(playlist_tracks(&conn, pid).unwrap().is_empty(), "playlist link removed");
+        assert!(
+            list_tracks(&conn, Some("kashmir"), None, 10, 0).unwrap().is_empty(),
+            "FTS entry removed"
+        );
+        assert!(delete_track(&conn, id).is_err(), "second delete is an error");
     }
 
     #[test]

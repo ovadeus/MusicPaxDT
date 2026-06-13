@@ -55,6 +55,7 @@ pub fn run() {
             commands::import_folder,
             commands::list_tracks,
             commands::update_track_metadata,
+            commands::delete_track,
             commands::get_audio_devices,
             commands::set_output_device,
             commands::load_track,

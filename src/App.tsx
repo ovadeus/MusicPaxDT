@@ -555,6 +555,20 @@ export default function App() {
               cur && cur.track.id === updated.id ? { ...cur, track: updated } : cur,
             );
           }}
+          onDeleted={(removed) => {
+            showStatus(`Removed “${removed.title ?? "track"}” from the library`);
+            // if it was playing or docked, stop it
+            if (stream && stream.id === removed.id) {
+              setStream(null);
+              ipc.stop().catch(() => {});
+            }
+            if (now?.track.id === removed.id) {
+              setNow(null);
+              ipc.stop().catch(() => {});
+            }
+            refreshPlaylists();
+            refreshTracks();
+          }}
         />
       )}
     </div>

@@ -114,6 +114,19 @@ pub async fn update_track_metadata(
     .map_err(|e| AppError::Other(format!("metadata task failed: {e}")))?
 }
 
+/// Remove a track from the library (and any playlists). The audio file on disk
+/// is left untouched.
+#[tauri::command]
+pub async fn delete_track(track_id: i64, state: State<'_, AppState>) -> AppResult<()> {
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = lock_unpoisoned(&db);
+        db::delete_track(&conn, track_id)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("delete task failed: {e}")))?
+}
+
 #[tauri::command]
 pub async fn get_audio_devices() -> AppResult<Vec<AudioDeviceInfo>> {
     tauri::async_runtime::spawn_blocking(engine::list_devices)

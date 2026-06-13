@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { X } from "lucide-react";
+import { Trash2, X } from "lucide-react";
 import * as ipc from "../lib/ipc";
 import type { Track } from "../lib/types";
 
@@ -7,13 +7,20 @@ interface Props {
   track: Track;
   onClose: () => void;
   onSaved: (track: Track) => void;
+  onDeleted: (track: Track) => void;
   onError: (message: string) => void;
 }
 
 /// Edit a track's title and metadata tags. For OWNED local files the changes
 /// are also written back into the file's tags; for streams they update the
 /// library entry only.
-export default function TrackEditModal({ track, onClose, onSaved, onError }: Props) {
+export default function TrackEditModal({
+  track,
+  onClose,
+  onSaved,
+  onDeleted,
+  onError,
+}: Props) {
   const [title, setTitle] = useState(track.title ?? "");
   const [artist, setArtist] = useState(track.artist ?? "");
   const [album, setAlbum] = useState(track.album ?? "");
@@ -22,6 +29,25 @@ export default function TrackEditModal({ track, onClose, onSaved, onError }: Pro
   const [busy, setBusy] = useState(false);
 
   const writesToFile = track.capability === "OWNED" && track.sourceKind === "local";
+
+  const remove = async () => {
+    const ok = window.confirm(
+      `Remove “${track.title ?? "this track"}” from the library?\n\nThis only removes the library entry${
+        writesToFile ? " — your audio file on disk is not deleted." : "."
+      }`,
+    );
+    if (!ok) return;
+    setBusy(true);
+    try {
+      await ipc.deleteTrack(track.id);
+      onDeleted(track);
+      onClose();
+    } catch (e) {
+      onError(`${e}`);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const save = async () => {
     setBusy(true);
@@ -98,7 +124,10 @@ export default function TrackEditModal({ track, onClose, onSaved, onError }: Pro
           </label>
         </div>
 
-        <div className="addurl-actions">
+        <div className="edit-actions">
+          <button className="delete-button" onClick={remove} disabled={busy}>
+            <Trash2 size={14} /> Delete
+          </button>
           <button className="import-button" onClick={save} disabled={busy}>
             {busy ? "Saving…" : "Save"}
           </button>

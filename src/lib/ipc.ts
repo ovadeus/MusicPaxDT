@@ -55,6 +55,10 @@ export function updateTrackMetadata(
   return invoke<Track>("update_track_metadata", { trackId, ...fields });
 }
 
+export function deleteTrack(trackId: number): Promise<void> {
+  return invoke<void>("delete_track", { trackId });
+}
+
 export function getAudioDevices(): Promise<AudioDevice[]> {
   return invoke<AudioDevice[]>("get_audio_devices");
 }

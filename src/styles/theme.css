@@ -921,6 +921,36 @@ button svg,
   flex: 1;
 }
 
+.edit-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 12px;
+}
+
+.delete-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  color: var(--danger);
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+  padding: 7px 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.delete-button:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+.delete-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .addurl-button {
   background: var(--bg);
   color: var(--text);
