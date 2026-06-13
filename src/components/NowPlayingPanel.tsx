@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronRight, ExternalLink } from "lucide-react";
 import * as ipc from "../lib/ipc";
+import MpxLogo from "./MpxLogo";
 import type { Track } from "../lib/types";
 
 interface Props {
@@ -10,19 +11,9 @@ interface Props {
   onError: (message: string) => void;
 }
 
-/// Default cover when no loop video or album art is available — the MusicPax
-/// mark (peace ring + blue up-arrow), drawn inline so it scales cleanly.
+/// Default cover when no loop video or album art is available — the MusicPax mark.
 function DefaultCover() {
-  return (
-    <svg className="np-default-cover" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
-      <circle cx="60" cy="60" r="52" fill="none" stroke="#2b2f36" strokeWidth="10" />
-      <line x1="60" y1="12" x2="60" y2="60" stroke="#2b2f36" strokeWidth="10" />
-      {/* blue up-arrow + peace legs */}
-      <polygon fill="#29abe2" points="60,30 80,54 66,54 66,108 54,108 54,54 40,54" />
-      <polygon fill="#29abe2" points="60,62 30,98 44,98 60,80" />
-      <polygon fill="#29abe2" points="60,62 90,98 76,98 60,80" />
-    </svg>
-  );
+  return <MpxLogo className="np-default-cover" />;
 }
 
 function youtubeThumb(uri: string): string | null {
