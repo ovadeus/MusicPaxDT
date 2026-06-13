@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Track } from "../lib/types";
 
 interface Props {
@@ -27,6 +27,9 @@ export default function StreamPlayer(props: Props) {
   const { track, playing, volume, seekRequestMs, onSeeked, onClose } = props;
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const readyRef = useRef(false);
+  // Docked: the player slides off-screen but stays mounted, so the audio
+  // keeps playing; a slim edge tab brings it back.
+  const [docked, setDocked] = useState(false);
 
   // Keep latest callbacks without re-binding listeners.
   const cbRef = useRef(props);
@@ -113,11 +116,29 @@ export default function StreamPlayer(props: Props) {
   if (!videoId) return null;
 
   return (
-    <div className="stream-player">
+    <>
+      {docked && (
+        <button
+          className="stream-dock-tab"
+          onClick={() => setDocked(false)}
+          title={`Show player — ${track.title ?? "stream"}`}
+        >
+          <span className="stream-dock-chevron">‹</span>
+          <span className="stream-dock-icon">📡</span>
+        </button>
+      )}
+      <div className={`stream-player${docked ? " docked" : ""}`}>
       <div className="stream-player-header">
         <span className="stream-player-title" title={track.title ?? ""}>
           📡 {track.title ?? "Stream"}
         </span>
+        <button
+          className="stream-player-dock"
+          onClick={() => setDocked(true)}
+          title="Dock — hide the video, keep playing"
+        >
+          ›
+        </button>
         <a
           className="stream-player-link"
           href={track.uri}
@@ -141,6 +162,7 @@ export default function StreamPlayer(props: Props) {
         allow="autoplay; encrypted-media; picture-in-picture"
         allowFullScreen
       />
-    </div>
+      </div>
+    </>
   );
 }

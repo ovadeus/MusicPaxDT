@@ -733,6 +733,49 @@ body {
   max-width: 290px;
 }
 
+.stream-player {
+  transition: transform 0.25s ease, opacity 0.25s ease;
+}
+
+.stream-player.docked {
+  transform: translateX(calc(100% + 24px));
+  opacity: 0;
+  pointer-events: none;
+}
+
+.stream-dock-tab {
+  position: fixed;
+  right: 0;
+  bottom: 150px;
+  z-index: 41;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-right: none;
+  border-radius: 10px 0 0 10px;
+  padding: 10px 8px 10px 6px;
+  cursor: pointer;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.stream-dock-tab:hover {
+  border-color: var(--accent);
+}
+
+.stream-dock-chevron {
+  color: var(--accent);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.stream-dock-icon {
+  font-size: 13px;
+}
+
+.stream-player-dock,
 .stream-player-link,
 .stream-player-close {
   background: transparent;
@@ -743,9 +786,15 @@ body {
   text-decoration: none;
 }
 
+.stream-player-dock:hover,
 .stream-player-link:hover,
 .stream-player-close:hover {
   color: var(--text);
+}
+
+.stream-player-dock {
+  font-size: 16px;
+  font-weight: 700;
 }
 
 /* ---------- integrations ---------- */
