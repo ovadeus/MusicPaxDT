@@ -80,6 +80,16 @@ pub async fn list_tracks(
     .map_err(|e| AppError::Other(format!("query task failed: {e}")))?
 }
 
+/// Artist mini-biography from Wikipedia (free, no key) for the Now Playing panel.
+#[tauri::command]
+pub async fn artist_bio(
+    artist: String,
+) -> AppResult<Option<crate::sources::wikipedia::ArtistBio>> {
+    crate::sources::wikipedia::artist_bio(&artist)
+        .await
+        .map_err(AppError::Other)
+}
+
 /// Read a local image file and return it as a `data:` URL. Used for custom
 /// thumbnails (the UI is served over http://localhost, so file:// paths won't
 /// load; an embedded data URL works everywhere). Capped at 2 MB.

@@ -555,6 +555,197 @@ button svg,
   color: var(--text-dim);
 }
 
+/* ---------- main content + right Now-Playing column ---------- */
+
+.app-content {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.app-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.now-playing-panel {
+  width: 320px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  background: var(--bg-raised);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.np-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.np-panel-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.np-collapse {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  display: flex;
+  padding: 2px;
+}
+
+.np-collapse:hover {
+  color: var(--text);
+}
+
+.np-reopen {
+  flex-shrink: 0;
+  width: 22px;
+  border: none;
+  border-left: 1px solid var(--border);
+  background: var(--bg-raised);
+  color: var(--text-dim);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.np-reopen:hover {
+  color: var(--accent);
+}
+
+.np-body,
+.np-empty {
+  padding: 16px;
+}
+
+.np-empty {
+  color: var(--text-dim);
+  text-align: center;
+}
+
+.np-media {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 14px;
+}
+
+.np-media-el {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.np-default-cover {
+  width: 55%;
+  height: 55%;
+  opacity: 0.7;
+}
+
+.np-empty .np-default-cover {
+  width: 96px;
+  height: 96px;
+  margin: 0 auto 10px;
+}
+
+.np-artist-line {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.np-song-line {
+  font-size: 14px;
+  color: var(--text);
+  margin-top: 3px;
+}
+
+.np-album-line {
+  font-size: 12.5px;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+
+.np-loop-field {
+  margin-top: 12px;
+  display: flex;
+  gap: 6px;
+}
+
+.np-loop-field input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.np-loop-edit,
+.np-loop-save {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.np-loop-edit:hover,
+.np-loop-save:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.np-bio {
+  margin-top: 16px;
+}
+
+.np-bio-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+
+.np-bio-loading {
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.np-bio-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--accent);
+  text-decoration: none;
+}
+
 /* ---------- library layout: sidebar + table ---------- */
 
 .library-layout {

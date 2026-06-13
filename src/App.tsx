@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Sparkles } from "lucide-react";
+import { ChevronLeft, Sparkles } from "lucide-react";
 import AddUrlModal from "./components/AddUrlModal";
 import EnrichReviewModal from "./components/EnrichReviewModal";
 import ModeMenu, { type UiMode } from "./components/ModeMenu";
+import NowPlayingPanel from "./components/NowPlayingPanel";
 import RadioPanel from "./components/RadioPanel";
 import RadioPlayer from "./components/RadioPlayer";
 import TrackEditModal from "./components/TrackEditModal";
@@ -72,6 +73,14 @@ export default function App() {
   const changeMode = (m: UiMode) => {
     setMode(m);
     localStorage.setItem("ui.mode", m);
+  };
+
+  const [showNowPlaying, setShowNowPlaying] = useState(
+    () => localStorage.getItem("ui.nowPlaying") !== "0",
+  );
+  const toggleNowPlaying = (show: boolean) => {
+    setShowNowPlaying(show);
+    localStorage.setItem("ui.nowPlaying", show ? "1" : "0");
   };
   const [formatLabel, setFormatLabel] = useState("");
   const [stream, setStream] = useState<Track | null>(null);
@@ -399,6 +408,10 @@ export default function App() {
   const lineIn =
     source !== "library" && source !== "radio" ? (source as LineInSource) : null;
 
+  // The track the Now Playing panel describes: a live stream, else the
+  // engine's loaded track.
+  const detailTrack = stream ?? now?.track ?? null;
+
   const handleStop = async () => {
     setStream(null);
     try {
@@ -493,6 +506,8 @@ export default function App() {
         </div>
       )}
 
+      <div className="app-content">
+      <div className="app-main">
       {source === "radio" ? (
         <RadioPanel
           curator={curator}
@@ -577,6 +592,25 @@ export default function App() {
           />
         </div>
       )}
+      </div>
+
+      {showNowPlaying ? (
+        <NowPlayingPanel
+          track={detailTrack}
+          curator={curator}
+          onCollapse={() => toggleNowPlaying(false)}
+          onError={showStatus}
+        />
+      ) : (
+        <button
+          className="np-reopen"
+          title="Show Now Playing"
+          onClick={() => toggleNowPlaying(true)}
+        >
+          <ChevronLeft size={16} />
+        </button>
+      )}
+      </div>
 
       {stream && stream.sourceKind === "radio" && (
         <RadioPlayer

@@ -64,6 +64,17 @@ export function readImageDataUrl(path: string): Promise<string> {
   return invoke<string>("read_image_data_url", { path });
 }
 
+export interface ArtistBio {
+  extract: string;
+  thumbnail: string | null;
+  url: string | null;
+  title: string;
+}
+
+export function artistBio(artist: string): Promise<ArtistBio | null> {
+  return invoke<ArtistBio | null>("artist_bio", { artist });
+}
+
 export function getAudioDevices(): Promise<AudioDevice[]> {
   return invoke<AudioDevice[]>("get_audio_devices");
 }
