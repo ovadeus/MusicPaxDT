@@ -176,14 +176,16 @@ export default function RadioPanel({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
-        <button
-          className="fav-toggle"
-          onClick={() => setAdding((v) => !v)}
-          title="Add a station by stream or page URL"
-        >
-          <Link2 size={14} />
-          Add stream
-        </button>
+        {curator && (
+          <button
+            className="fav-toggle"
+            onClick={() => setAdding((v) => !v)}
+            title="Add a station by stream or page URL"
+          >
+            <Link2 size={14} />
+            Add stream
+          </button>
+        )}
         <button
           className={`fav-toggle${showFavorites ? " active" : ""}`}
           onClick={() => setShowFavorites((v) => !v)}
