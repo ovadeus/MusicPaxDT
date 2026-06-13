@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Play, Plus, Radio as RadioIcon, Star } from "lucide-react";
+import { Link2, Play, Plus, Radio as RadioIcon, Star } from "lucide-react";
 import * as ipc from "../lib/ipc";
 import type { RadioStation } from "../lib/types";
 
@@ -29,6 +29,9 @@ export default function RadioPanel({
   const [favorites, setFavorites] = useState<RadioStation[]>([]);
   const [showFavorites, setShowFavorites] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [adding, setAdding] = useState(false);
+  const [customUrl, setCustomUrl] = useState("");
+  const [resolving, setResolving] = useState(false);
   const debounce = useRef<number | undefined>(undefined);
 
   // Load persisted favorites once.
@@ -87,6 +90,26 @@ export default function RadioPanel({
     }
   };
 
+  // Resolve a pasted link → a station, save it to favorites, and play it.
+  const addCustom = async () => {
+    const url = customUrl.trim();
+    if (!url) return;
+    setResolving(true);
+    try {
+      const station = await ipc.resolveRadioStream(url);
+      if (!favUrls.has(station.url)) persist([station, ...favorites]);
+      setCustomUrl("");
+      setAdding(false);
+      setShowFavorites(true);
+      onPlay(station);
+      onAdded(station.name);
+    } catch (e) {
+      onError(`${e}`);
+    } finally {
+      setResolving(false);
+    }
+  };
+
   // What to show: favorites (filtered locally by query) or fetched stations.
   const visible = useMemo(() => {
     if (!showFavorites) return stations;
@@ -115,6 +138,14 @@ export default function RadioPanel({
           onChange={(e) => setQuery(e.target.value)}
         />
         <button
+          className="fav-toggle"
+          onClick={() => setAdding((v) => !v)}
+          title="Add a station by stream or page URL"
+        >
+          <Link2 size={14} />
+          Add stream
+        </button>
+        <button
           className={`fav-toggle${showFavorites ? " active" : ""}`}
           onClick={() => setShowFavorites((v) => !v)}
           title={showFavorites ? "Show all stations" : "Show favorites only"}
@@ -126,6 +157,23 @@ export default function RadioPanel({
           {loading ? "loading…" : `${visible.length} stations`}
         </span>
       </div>
+
+      {adding && (
+        <div className="radio-add-stream">
+          <input
+            type="url"
+            className="search-box"
+            placeholder="Paste a stream or player URL (e.g. https://…/stream.mp3 or a station page)"
+            value={customUrl}
+            autoFocus
+            onChange={(e) => setCustomUrl(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && addCustom()}
+          />
+          <button className="import-button" onClick={addCustom} disabled={resolving || !customUrl.trim()}>
+            {resolving ? "Resolving…" : "Add & Play"}
+          </button>
+        </div>
+      )}
 
       <div className="radio-grid">
         {!loading && visible.length === 0 && (

@@ -69,6 +69,13 @@ pub async fn radio_search(query: String, limit: Option<u32>) -> AppResult<Vec<Ra
         .map_err(AppError::Other)
 }
 
+/// Resolve a pasted link (player page, playlist, or direct URL) into a
+/// playable station. Best effort — returns a clear error if no stream is found.
+#[tauri::command]
+pub async fn resolve_radio_stream(url: String) -> AppResult<RadioStation> {
+    radio::resolve_stream(&url).await.map_err(AppError::Other)
+}
+
 /// Save a station as a STREAM_PLAYABLE library track (source_kind = "radio").
 #[tauri::command]
 pub async fn import_radio_station(

@@ -124,6 +124,211 @@ pub async fn search(query: &str, limit: u32) -> Result<Vec<RadioStation>, String
     Ok(dedupe_and_collect(raw))
 }
 
+// ---------------------------------------------------------------------------
+// Custom stream resolver: turn a user-pasted link into a playable station.
+// Handles direct audio URLs, .pls/.m3u playlists, HLS (.m3u8), and a
+// best-effort scrape of a player page. Never downloads an audio body (those
+// streams are infinite) — only headers, and text for playlist/HTML types.
+// ---------------------------------------------------------------------------
+
+fn host_of(url: &str) -> String {
+    url.split("://")
+        .nth(1)
+        .unwrap_or(url)
+        .split('/')
+        .next()
+        .unwrap_or(url)
+        .to_string()
+}
+
+fn looks_like_direct_audio(url: &str) -> bool {
+    let u = url.split(['?', '#']).next().unwrap_or(url).to_lowercase();
+    u.ends_with(".mp3")
+        || u.ends_with(".aac")
+        || u.ends_with(".ogg")
+        || u.ends_with(".opus")
+        || u.ends_with(".m3u8") // HLS — WebKit <audio> plays it directly
+        || u.ends_with(".flac")
+        || u.ends_with(';') // common Icecast/Shoutcast mount suffix
+}
+
+/// Extract every absolute http(s) URL from a blob of text.
+fn extract_urls(text: &str) -> Vec<String> {
+    let mut urls = Vec::new();
+    let mut search = 0;
+    while let Some(rel) = text[search..].find("http") {
+        let start = search + rel;
+        let rest = &text[start..];
+        if rest.starts_with("http://") || rest.starts_with("https://") {
+            let end = rest
+                .find(|c: char| {
+                    c.is_whitespace()
+                        || matches!(c, '"' | '\'' | '<' | '>' | '\\' | ')' | '(' | ']' | '[' | '`')
+                })
+                .unwrap_or(rest.len());
+            let url = rest[..end].trim_end_matches(['.', ',', ';']);
+            if url.len() > 12 {
+                urls.push(url.to_string());
+            }
+            search = start + end.max(4);
+        } else {
+            search = start + 4;
+        }
+    }
+    urls
+}
+
+/// Choose the most stream-like URL from candidates.
+fn pick_stream_url(urls: &[String]) -> Option<String> {
+    let score = |u: &str| -> i32 {
+        let l = u.to_lowercase();
+        let is_audio_ext = l.contains(".m3u8")
+            || l.ends_with(".mp3")
+            || l.contains(".mp3?")
+            || l.ends_with(".aac")
+            || l.contains(".aac?")
+            || l.ends_with(".opus");
+        if is_audio_ext {
+            5
+        } else if l.contains("/stream") || l.contains("/listen") || l.contains("icecast") {
+            3
+        } else if l.contains(".pls") || l.contains(".m3u") {
+            2
+        } else {
+            0
+        }
+    };
+    urls.iter().filter(|u| score(u) > 0).max_by_key(|u| score(u)).cloned()
+}
+
+fn title_of(html: &str) -> Option<String> {
+    let lower = html.to_lowercase();
+    let start = lower.find("<title")?;
+    let gt = lower[start..].find('>')? + start + 1;
+    let end = lower[gt..].find("</title>")? + gt;
+    let t = html[gt..end].trim();
+    (!t.is_empty()).then(|| t.to_string())
+}
+
+/// First playable URL from a .pls or .m3u/.m3u8 playlist body.
+fn parse_playlist(body: &str, base_url: &str) -> Option<String> {
+    for line in body.lines() {
+        let line = line.trim();
+        if let Some((_, url)) = line.strip_prefix("File").and_then(|r| r.split_once('=')) {
+            let url = url.trim();
+            if url.starts_with("http") {
+                return Some(url.to_string());
+            }
+        }
+    }
+    if body.contains("#EXTM3U") && base_url.to_lowercase().contains("m3u8") {
+        return Some(base_url.to_string());
+    }
+    body.lines()
+        .map(str::trim)
+        .find(|l| l.starts_with("http"))
+        .map(|l| l.to_string())
+}
+
+fn codec_from_ctype(ctype: &str) -> Option<String> {
+    if ctype.contains("mpeg") || ctype.contains("mp3") {
+        Some("MP3".into())
+    } else if ctype.contains("aac") {
+        Some("AAC".into())
+    } else if ctype.contains("ogg") {
+        Some("OGG".into())
+    } else {
+        None
+    }
+}
+
+fn custom_station(name: String, url: String, codec: Option<String>) -> RadioStation {
+    let name = name.trim();
+    RadioStation {
+        uuid: String::new(),
+        name: if name.is_empty() { host_of(&url) } else { name.to_string() },
+        url,
+        favicon: None,
+        tags: Some("custom".into()),
+        country: None,
+        codec,
+        bitrate: 0,
+    }
+}
+
+/// Resolve a pasted link into a playable station (best effort). Never reads an
+/// audio body (those are infinite streams) — only headers, plus text for
+/// playlist/HTML content types.
+pub async fn resolve_stream(input: &str) -> Result<RadioStation, String> {
+    let input = input.trim();
+    if !(input.starts_with("http://") || input.starts_with("https://")) {
+        return Err("Enter a full http(s) stream or page URL.".into());
+    }
+    if looks_like_direct_audio(input) {
+        return Ok(custom_station(host_of(input), input.to_string(), None));
+    }
+
+    let resp = http()
+        .get(input)
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach that URL: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("That URL returned HTTP {}.", resp.status()));
+    }
+    let ctype = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_lowercase();
+    let icy_name = resp
+        .headers()
+        .get("icy-name")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    // Direct audio response: use the URL as-is, do NOT read the (endless) body.
+    if ctype.starts_with("audio/") || ctype.contains("application/ogg") {
+        return Ok(custom_station(
+            icy_name.unwrap_or_else(|| host_of(input)),
+            input.to_string(),
+            codec_from_ctype(&ctype),
+        ));
+    }
+
+    // Playlist or HTML → safe to read as text.
+    let body = resp.text().await.map_err(|e| format!("Read failed: {e}"))?;
+
+    if ctype.contains("mpegurl")
+        || ctype.contains("scpls")
+        || input.to_lowercase().contains(".pls")
+        || input.to_lowercase().contains(".m3u")
+        || body.trim_start().starts_with("[playlist]")
+        || body.trim_start().starts_with("#EXTM3U")
+    {
+        if let Some(u) = parse_playlist(&body, input) {
+            return Ok(custom_station(
+                icy_name.unwrap_or_else(|| host_of(&u)),
+                u,
+                None,
+            ));
+        }
+    }
+
+    let name = icy_name.or_else(|| title_of(&body)).unwrap_or_else(|| host_of(input));
+    match pick_stream_url(&extract_urls(&body)) {
+        Some(u) => Ok(custom_station(name, u, None)),
+        None => Err(
+            "Couldn't find an audio stream on that page. Paste the direct stream URL \
+             (often ending in .mp3, .aac, or .m3u8) — usually found via the player's \
+             “share” option or the page source."
+                .into(),
+        ),
+    }
+}
+
 /// Minimal percent-encoding for a query value (the API is permissive, but
 /// spaces and `&`/`?`/`#`/`%`/`+` must not break the URL).
 fn urlencoding(s: &str) -> String {
@@ -180,6 +385,35 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].url, "https://kexp.example/stream");
         assert_eq!(out[0].favicon, None); // empty string filtered to None
+    }
+
+    #[test]
+    fn direct_audio_urls_are_recognized() {
+        assert!(looks_like_direct_audio("https://x/stream.mp3"));
+        assert!(looks_like_direct_audio("https://x/hls/master.m3u8?x=1"));
+        assert!(looks_like_direct_audio("https://x/listen;"));
+        assert!(!looks_like_direct_audio("https://live.mystreamplayer.com/pmgkauai?autoplay=1"));
+    }
+
+    #[test]
+    fn extracts_and_picks_the_stream_from_html() {
+        let html = r#"<html><head><title>PMG Kauai</title></head>
+            <body><script>var cfg={"poster":"https://cdn/img.png",
+            "src":"https://live.mystreamplayer.com/pmgkauai/icecast.audio"};</script>
+            <a href="https://example.com/about">about</a></body></html>"#;
+        let urls = extract_urls(html);
+        assert!(urls.iter().any(|u| u.contains("icecast.audio")));
+        let pick = pick_stream_url(&urls).expect("a stream candidate");
+        assert!(pick.contains("icecast.audio"));
+        assert_eq!(title_of(html).as_deref(), Some("PMG Kauai"));
+    }
+
+    #[test]
+    fn parses_pls_and_m3u() {
+        let pls = "[playlist]\nNumberOfEntries=1\nFile1=https://cdn/stream.mp3\n";
+        assert_eq!(parse_playlist(pls, "x").as_deref(), Some("https://cdn/stream.mp3"));
+        let m3u = "#EXTM3U\n#EXTINF:-1,Station\nhttps://cdn/live.aac\n";
+        assert_eq!(parse_playlist(m3u, "x").as_deref(), Some("https://cdn/live.aac"));
     }
 
     #[test]

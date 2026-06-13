@@ -235,6 +235,10 @@ export function radioSearch(query: string, limit?: number): Promise<RadioStation
   return invoke<RadioStation[]>("radio_search", { query, limit: limit ?? null });
 }
 
+export function resolveRadioStream(url: string): Promise<RadioStation> {
+  return invoke<RadioStation>("resolve_radio_stream", { url });
+}
+
 export function importRadioStation(station: RadioStation): Promise<Track> {
   return invoke<Track>("import_radio_station", {
     name: station.name,

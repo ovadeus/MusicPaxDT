@@ -38,6 +38,7 @@ commands.allow = [
     "mirror_playlist",
     "radio_top",
     "radio_search",
+    "resolve_radio_stream",
     "import_radio_station",
     "list_playlists",
     "create_playlist",

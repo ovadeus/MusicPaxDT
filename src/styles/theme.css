@@ -1378,6 +1378,17 @@ button svg,
   border-color: #f5c451;
 }
 
+.radio-add-stream {
+  display: flex;
+  gap: 8px;
+  padding: 0 16px 12px;
+}
+
+.radio-add-stream .search-box {
+  flex: 1;
+  max-width: none;
+}
+
 .fav-toggle {
   display: inline-flex;
   align-items: center;

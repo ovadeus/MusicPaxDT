@@ -83,6 +83,7 @@ pub fn run() {
             commands::streams::mirror_playlist,
             commands::streams::radio_top,
             commands::streams::radio_search,
+            commands::streams::resolve_radio_stream,
             commands::streams::import_radio_station,
             commands::streams::list_playlists,
             commands::streams::create_playlist,
