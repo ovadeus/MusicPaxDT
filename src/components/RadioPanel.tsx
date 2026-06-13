@@ -9,6 +9,7 @@ interface Props {
   nowPlayingUrl: string | null;
   onPlay: (station: RadioStation) => void;
   onAdded: (name: string) => void;
+  onInfo: (message: string) => void;
   onError: (message: string) => void;
 }
 
@@ -23,6 +24,7 @@ export default function RadioPanel({
   nowPlayingUrl,
   onPlay,
   onAdded,
+  onInfo,
   onError,
 }: Props) {
   const [query, setQuery] = useState("");
@@ -81,8 +83,13 @@ export default function RadioPanel({
   };
 
   const toggleFav = (s: RadioStation) => {
-    if (isFav(s)) persist(favorites.filter((f) => f.url !== s.url));
-    else persist([...favorites, s]);
+    if (isFav(s)) {
+      persist(favorites.filter((f) => f.url !== s.url));
+      onInfo(`Removed “${s.name}” from Favorites`);
+    } else {
+      persist([...favorites, s]);
+      onInfo(`Added “${s.name}” to Favorites`);
+    }
   };
 
   const openEditor = (s: RadioStation) => {
@@ -114,6 +121,7 @@ export default function RadioPanel({
       : [...favorites, { ...editing, name, favicon }];
     persist(next);
     setEditing(null);
+    onInfo(`Saved “${name}”`);
   };
 
   const add = async (s: RadioStation) => {

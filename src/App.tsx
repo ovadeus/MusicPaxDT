@@ -448,6 +448,7 @@ export default function App() {
             showStatus(`Added “${name}” to the library`);
             refreshTracks();
           }}
+          onInfo={showStatus}
           onError={showStatus}
         />
       ) : lineIn ? (
