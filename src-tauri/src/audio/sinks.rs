@@ -435,32 +435,38 @@ pub struct Mp3Sink {
     right: Vec<f32>,
 }
 
+/// Build a configured LAME encoder (stereo, joint-stereo, best quality). Shared
+/// by the MP3 file sink and the live broadcaster so both encode identically.
+pub fn build_mp3_encoder(sample_rate: u32, kbps: u32) -> Result<mp3lame_encoder::Encoder, String> {
+    use mp3lame_encoder::{Bitrate, Builder, Mode, Quality};
+    let mut builder = Builder::new().ok_or("LAME init failed")?;
+    builder
+        .set_sample_rate(sample_rate)
+        .map_err(|e| format!("LAME sample rate: {e}"))?;
+    builder
+        .set_num_channels(2)
+        .map_err(|e| format!("LAME channels: {e}"))?;
+    let bitrate = match kbps {
+        128 => Bitrate::Kbps128,
+        192 => Bitrate::Kbps192,
+        256 => Bitrate::Kbps256,
+        _ => Bitrate::Kbps320,
+    };
+    builder
+        .set_brate(bitrate)
+        .map_err(|e| format!("LAME bitrate: {e}"))?;
+    builder
+        .set_mode(Mode::JointStereo)
+        .map_err(|e| format!("LAME mode: {e}"))?;
+    builder
+        .set_quality(Quality::Best)
+        .map_err(|e| format!("LAME quality: {e}"))?;
+    builder.build().map_err(|e| format!("LAME build: {e}"))
+}
+
 impl Mp3Sink {
     pub fn create(path: PathBuf, sample_rate: u32, kbps: u32) -> Result<Self, String> {
-        use mp3lame_encoder::{Bitrate, Builder, Mode, Quality};
-        let mut builder = Builder::new().ok_or("LAME init failed")?;
-        builder
-            .set_sample_rate(sample_rate)
-            .map_err(|e| format!("LAME sample rate: {e}"))?;
-        builder
-            .set_num_channels(2)
-            .map_err(|e| format!("LAME channels: {e}"))?;
-        let bitrate = match kbps {
-            128 => Bitrate::Kbps128,
-            192 => Bitrate::Kbps192,
-            256 => Bitrate::Kbps256,
-            _ => Bitrate::Kbps320,
-        };
-        builder
-            .set_brate(bitrate)
-            .map_err(|e| format!("LAME bitrate: {e}"))?;
-        builder
-            .set_mode(Mode::JointStereo)
-            .map_err(|e| format!("LAME mode: {e}"))?;
-        builder
-            .set_quality(Quality::Best)
-            .map_err(|e| format!("LAME quality: {e}"))?;
-        let encoder = builder.build().map_err(|e| format!("LAME build: {e}"))?;
+        let encoder = build_mp3_encoder(sample_rate, kbps)?;
         let file = BufWriter::new(File::create(&path).map_err(|e| e.to_string())?);
         Ok(Self {
             file,

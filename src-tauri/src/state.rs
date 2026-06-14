@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use rusqlite::Connection;
 
+use crate::audio::broadcast::Broadcaster;
 use crate::audio::engine::EngineHandle;
 
 /// Lock a mutex, recovering from poisoning (a panicked holder) instead of
@@ -13,4 +14,6 @@ pub fn lock_unpoisoned<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 pub struct AppState {
     pub db: Arc<Mutex<Connection>>,
     pub engine: Arc<EngineHandle>,
+    /// Live "Go Live" broadcaster (Icecast source client).
+    pub broadcaster: Arc<Broadcaster>,
 }

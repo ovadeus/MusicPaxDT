@@ -85,6 +85,14 @@ pub struct Shared {
     pub recording: AtomicBool,
     pub rec_frames: AtomicU64,
     pub in_rate: AtomicU32,
+    // Live broadcast tee. The realtime callback pushes post-volume stereo into a
+    // per-stream ring when `broadcasting` is set; the broadcast worker drains the
+    // CURRENT consumer (swapped in whenever the output stream is rebuilt, e.g. a
+    // track change) so going live survives track changes. The callback never
+    // touches `bcast_cons` — only its own moved-in Producer — so it stays
+    // lock-free.
+    pub broadcasting: AtomicBool,
+    pub bcast_cons: Mutex<Option<Consumer<f32>>>,
 }
 
 impl Shared {
@@ -108,6 +116,8 @@ impl Shared {
             recording: AtomicBool::new(false),
             rec_frames: AtomicU64::new(0),
             in_rate: AtomicU32::new(44_100),
+            broadcasting: AtomicBool::new(false),
+            bcast_cons: Mutex::new(None),
         }
     }
 
@@ -893,6 +903,14 @@ fn build_stream_for<T: SizedSample + FromSample<f32>>(
     shared: Arc<Shared>,
 ) -> Result<Stream, String> {
     let channels = (config.channels as usize).max(1);
+
+    // Live-broadcast tee: a per-stream ring whose Consumer is registered in
+    // `shared.bcast_cons` for the broadcast worker to drain. The Producer is
+    // moved into the callback and pushed (lock-free) only while broadcasting.
+    // ~4s of stereo headroom so a momentarily-stalled socket doesn't glitch.
+    let (mut bcast_prod, bcast_cons) = RingBuffer::<f32>::new(config.sample_rate.0 as usize * 8);
+    *lock_unpoisoned(&shared.bcast_cons) = Some(bcast_cons);
+
     let stream = device
         .build_output_stream(
             config,
@@ -900,6 +918,7 @@ fn build_stream_for<T: SizedSample + FromSample<f32>>(
                 let playing = shared.state.load(Ordering::Relaxed) == STATE_PLAYING;
                 let volume = f32::from_bits(shared.volume_bits.load(Ordering::Relaxed));
                 let decode_done = shared.decode_done.load(Ordering::Acquire);
+                let broadcasting = shared.broadcasting.load(Ordering::Relaxed);
                 let frames = data.len() / channels;
                 let mut consumed: u64 = 0;
                 let (mut peak_l, mut peak_r) = (0.0f32, 0.0f32);
@@ -914,6 +933,11 @@ fn build_stream_for<T: SizedSample + FromSample<f32>>(
                     }
                     l *= volume;
                     r *= volume;
+                    // Tee the post-volume mix to the broadcaster (drop on overflow).
+                    if broadcasting {
+                        let _ = bcast_prod.push(l);
+                        let _ = bcast_prod.push(r);
+                    }
                     peak_l = peak_l.max(l.abs());
                     peak_r = peak_r.max(r.abs());
                     sum_l += l * l;
