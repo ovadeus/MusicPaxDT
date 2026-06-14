@@ -1,3 +1,5 @@
+import { ChevronRight } from "lucide-react";
+
 interface Props {
   width: number;
   min: number;
@@ -40,14 +42,7 @@ export default function SidebarResizer({ width, min, max, onChange, onCommit }: 
       onDoubleClick={() => onCommit(200)}
     >
       <span className="col-resizer-grip" aria-hidden>
-        <svg width="6" height="18" viewBox="0 0 6 18" fill="currentColor">
-          <circle cx="1.5" cy="3" r="1.1" />
-          <circle cx="4.5" cy="3" r="1.1" />
-          <circle cx="1.5" cy="9" r="1.1" />
-          <circle cx="4.5" cy="9" r="1.1" />
-          <circle cx="1.5" cy="15" r="1.1" />
-          <circle cx="4.5" cy="15" r="1.1" />
-        </svg>
+        <ChevronRight size={13} />
       </span>
     </div>
   );

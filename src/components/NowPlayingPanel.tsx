@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronRight, ExternalLink } from "lucide-react";
+import { ChevronRight, ExternalLink, ImagePlus } from "lucide-react";
 import * as ipc from "../lib/ipc";
 import MpxLogo from "./MpxLogo";
 import type { Track } from "../lib/types";
@@ -30,6 +30,9 @@ export default function NowPlayingPanel({ track, curator, onCollapse, onError }:
   const [imgFailed, setImgFailed] = useState(false);
   const [editingBio, setEditingBio] = useState(false);
   const [bioDraft, setBioDraft] = useState("");
+  const [coverUrl, setCoverUrl] = useState("");
+  const [editingCover, setEditingCover] = useState(false);
+  const [coverDraft, setCoverDraft] = useState("");
 
   const artist = track?.artist ?? null;
   const trackId = track?.id ?? null;
@@ -62,13 +65,16 @@ export default function NowPlayingPanel({ track, curator, onCollapse, onError }:
     }
   };
 
-  // Load this track's saved loop-video URL (settings: loopvideo.<id>).
+  // Load this track's saved loop-video + custom cover URLs (settings:
+  // loopvideo.<id> / cover.<id>).
   const loadedFor = useRef<number | null>(null);
   useEffect(() => {
     setImgFailed(false);
     setEditingLoop(false);
+    setEditingCover(false);
     if (trackId == null) {
       setLoopUrl("");
+      setCoverUrl("");
       return;
     }
     ipc
@@ -76,8 +82,12 @@ export default function NowPlayingPanel({ track, curator, onCollapse, onError }:
       .then((s) => {
         loadedFor.current = trackId;
         setLoopUrl(s[`loopvideo.${trackId}`] ?? "");
+        setCoverUrl(s[`cover.${trackId}`] ?? "");
       })
-      .catch(() => setLoopUrl(""));
+      .catch(() => {
+        setLoopUrl("");
+        setCoverUrl("");
+      });
   }, [trackId]);
 
   const saveLoop = async () => {
@@ -92,12 +102,25 @@ export default function NowPlayingPanel({ track, curator, onCollapse, onError }:
     }
   };
 
-  // Media priority: 1) loop video, 2) album cover / yt thumb, 3) default logo.
-  // artPath may be a remote URL (mpx import) or a local file path (enrich
-  // cache); only URLs/data load over the localhost origin.
+  const saveCover = async () => {
+    if (trackId == null) return;
+    const url = coverDraft.trim();
+    try {
+      await ipc.setSetting(`cover.${trackId}`, url);
+      setCoverUrl(url);
+      setImgFailed(false);
+      setEditingCover(false);
+    } catch (e) {
+      onError(`${e}`);
+    }
+  };
+
+  // Media priority: 1) loop video, 2) custom cover, 3) album art / yt thumb,
+  // 4) default logo. artPath may be a remote URL (mpx import) or a local file
+  // path (enrich cache); only URLs/data load over the localhost origin.
   const artUrl =
     track?.artPath && /^(https?:|data:)/.test(track.artPath) ? track.artPath : null;
-  const cover = artUrl || (track ? youtubeThumb(track.uri) : null);
+  const cover = coverUrl || artUrl || (track ? youtubeThumb(track.uri) : null);
   const showVideo = loopUrl.length > 0;
   const showImage = !showVideo && !!cover && !imgFailed;
 
@@ -138,7 +161,35 @@ export default function NowPlayingPanel({ track, curator, onCollapse, onError }:
             ) : (
               <DefaultCover />
             )}
+            {curator && !showVideo && (
+              <button
+                className="np-cover-edit"
+                title={coverUrl ? "Change cover image" : "Add cover image"}
+                onClick={() => {
+                  setCoverDraft(coverUrl);
+                  setEditingCover((v) => !v);
+                }}
+              >
+                <ImagePlus size={14} />
+              </button>
+            )}
           </div>
+
+          {curator && editingCover && (
+            <div className="np-loop-field">
+              <input
+                type="url"
+                placeholder="Cover image URL (jpg/png/webp)"
+                value={coverDraft}
+                autoFocus
+                onChange={(e) => setCoverDraft(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && saveCover()}
+              />
+              <button className="np-loop-save" onClick={saveCover}>
+                Save
+              </button>
+            </div>
+          )}
 
           <div className="np-artist-line">{track.artist ?? "Unknown artist"}</div>
           <div className="np-song-line">{track.title ?? "Untitled"}</div>

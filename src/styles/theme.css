@@ -88,7 +88,14 @@ body {
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 6px 8px;
+  padding: 7px 12px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.device-picker:hover {
+  border-color: var(--accent);
 }
 
 .import-button {
@@ -675,6 +682,7 @@ button svg,
 }
 
 .np-media {
+  position: relative;
   width: 100%;
   aspect-ratio: 1 / 1;
   border-radius: 10px;
@@ -685,6 +693,31 @@ button svg,
   align-items: center;
   justify-content: center;
   margin-bottom: 14px;
+}
+
+/* Curator-only "edit cover image" button, bottom-right of the cover */
+.np-cover-edit {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  background: rgba(12, 14, 18, 0.72);
+  border: 1px solid var(--border);
+  color: var(--text);
+  cursor: pointer;
+  backdrop-filter: blur(3px);
+  transition: border-color 0.12s, color 0.12s, background 0.12s;
+}
+
+.np-cover-edit:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(12, 14, 18, 0.9);
 }
 
 .np-media-el {
@@ -786,6 +819,7 @@ button svg,
 .np-bio-editbtn {
   display: inline-block;
   margin-top: 10px;
+  margin-left: 10px;
   background: transparent;
   border: 1px solid var(--border);
   color: var(--text-dim);
@@ -873,9 +907,9 @@ button svg,
 }
 
 .col-resizer-grip {
-  width: 13px;
-  height: 38px;
-  border-radius: 7px;
+  width: 14px;
+  height: 52px;
+  border-radius: 3px;
   background: var(--bg-raised);
   border: 1px solid var(--border);
   display: flex;
