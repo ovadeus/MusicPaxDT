@@ -4,7 +4,8 @@ export type SelectableSource =
   | "tape"
   | "cd"
   | "aux"
-  | "radio";
+  | "radio"
+  | "stream";
 
 interface Source {
   key: string;
@@ -12,7 +13,6 @@ interface Source {
   enabled: boolean;
 }
 
-// M2: the receiver inputs are live. Radio (M3) and Stream (M5) stay stubbed.
 const SOURCES: Source[] = [
   { key: "phono", label: "Phono", enabled: true },
   { key: "tape", label: "Tape", enabled: true },
@@ -20,7 +20,7 @@ const SOURCES: Source[] = [
   { key: "aux", label: "Aux", enabled: true },
   { key: "radio", label: "Radio", enabled: true },
   { key: "library", label: "Library", enabled: true },
-  { key: "stream", label: "Stream", enabled: false },
+  { key: "stream", label: "Stream", enabled: true },
 ];
 
 interface Props {

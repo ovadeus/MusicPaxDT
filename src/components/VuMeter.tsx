@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { onVuLevels } from "../lib/ipc";
+import * as streamMeter from "../lib/streamMeter";
 
 const WIDTH = 180;
 const HEIGHT = 44;
@@ -8,8 +9,10 @@ const DECAY_PER_FRAME = 0.92; // smooth fall-back
 const PEAK_HOLD_FRAMES = 30;
 
 interface Props {
-  /// Stream lanes (YouTube/radio) can't be metered for real — their audio is
-  /// sandboxed — so animate a synthesized level while they play.
+  /// Stream lanes can't always be metered for real. Radio is tapped via Web
+  /// Audio when the server allows CORS (real levels); YouTube is sandboxed and
+  /// has no signal at all. When no real levels are available and `synthetic`
+  /// is set, we animate a plausible level instead.
   synthetic?: boolean;
   /// Whether sound is currently playing (drives the synthetic animation).
   active?: boolean;
@@ -64,26 +67,41 @@ export default function VuMeter({ synthetic = false, active = false }: Props) {
       else unlisten = fn;
     });
 
-    // A plausible, musical-looking level: each channel wanders toward a new
-    // random target now and then, with light per-frame jitter.
+    // A plausible, musical-looking level: a slowly-drifting energy floor with
+    // periodic beat-like swells and light per-frame jitter. Used only when no
+    // real signal is available (YouTube, or radio without CORS).
     const feedSynth = (i: number) => {
       const s = synth.current[i];
-      if (Math.random() < 0.09) s.target = 0.4 + Math.random() * 0.55;
-      s.value += (s.target - s.value) * 0.28;
-      const v = Math.max(0, Math.min(1, s.value + (Math.random() - 0.5) * 0.12));
+      if (Math.random() < 0.05) s.target = 0.35 + Math.random() * 0.5;
+      // Occasional accent "hit" to read like a beat.
+      if (Math.random() < 0.04) s.target = Math.min(1, s.target + 0.3);
+      s.value += (s.target - s.value) * 0.3;
+      const v = Math.max(0, Math.min(1, s.value + (Math.random() - 0.5) * 0.1));
       const ch = channels.current[i];
       ch.peak = Math.max(ch.peak, v);
       ch.rms = Math.max(ch.rms, v * 0.72);
     };
 
+    // Real radio levels when the Web Audio tap is live (CORS-cleared stream).
+    const feedLive = (levels: ReturnType<typeof streamMeter.getLevels>) => {
+      if (!levels) return;
+      const [l, r] = channels.current;
+      l.rms = Math.max(l.rms, levels.rmsL);
+      l.peak = Math.max(l.peak, levels.peakL);
+      r.rms = Math.max(r.rms, levels.rmsR);
+      r.peak = Math.max(r.peak, levels.peakR);
+    };
+
     const draw = () => {
       const { synthetic: syn, active: act } = modeRef.current;
+      const live = streamMeter.getLevels();
+      if (live) feedLive(live);
       const canvas = canvasRef.current;
       const ctx = canvas?.getContext("2d");
       if (canvas && ctx) {
         ctx.clearRect(0, 0, WIDTH, HEIGHT);
         channels.current.forEach((ch, i) => {
-          if (syn && act) feedSynth(i);
+          if (!live && syn && act) feedSynth(i);
           const y = i === 0 ? 4 : HEIGHT - BAR_H - 4;
           drawBar(ctx, y, ch);
           ch.rms *= DECAY_PER_FRAME;
