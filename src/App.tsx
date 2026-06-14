@@ -1,12 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { ChevronLeft, Sparkles } from "lucide-react";
+import { ChevronLeft, Settings as SettingsIcon } from "lucide-react";
+import ManageMusicMenu from "./components/ManageMusicMenu";
+import GoLivePanel from "./components/GoLivePanel";
 import AddUrlModal from "./components/AddUrlModal";
+import YouTubeSearchView from "./components/YouTubeSearchView";
 import EnrichReviewModal from "./components/EnrichReviewModal";
 import ModeMenu, { type UiMode } from "./components/ModeMenu";
 import NowPlayingPanel from "./components/NowPlayingPanel";
 import RadioPanel from "./components/RadioPanel";
 import RadioPlayer from "./components/RadioPlayer";
+import StreamPanel from "./components/StreamPanel";
+import DirectStreamPlayer from "./components/DirectStreamPlayer";
 import TrackEditModal from "./components/TrackEditModal";
 import LibraryTable from "./components/LibraryTable";
 import Logo from "./components/Logo";
@@ -53,7 +58,10 @@ export default function App() {
     recordedMs: 0,
   });
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [addUrlOpen, setAddUrlOpen] = useState(false);
+  const [addUrlMode, setAddUrlMode] = useState<"youtube" | "spotify" | null>(null);
+  const [ytSearchOpen, setYtSearchOpen] = useState(false);
+  const [goLiveOpen, setGoLiveOpen] = useState(false);
+  const [onAir, setOnAir] = useState(false);
   const [editTrack, setEditTrack] = useState<Track | null>(null);
   const [enrichingId, setEnrichingId] = useState<number | null>(null);
   const [enrichProgress, setEnrichProgress] = useState<{
@@ -104,7 +112,11 @@ export default function App() {
 
   const refreshTracks = useCallback(async () => {
     try {
-      if (view.kind === "playlist") {
+      if (source === "stream") {
+        // The Stream view is the library, filtered to direct-stream tracks.
+        const all = await ipc.listTracks({ query, sort });
+        setTracks(all.filter((t) => t.sourceKind === "stream"));
+      } else if (view.kind === "playlist") {
         setTracks(await ipc.playlistTracks(view.id));
       } else {
         setTracks(await ipc.listTracks({ query, sort }));
@@ -112,7 +124,7 @@ export default function App() {
     } catch (e) {
       showStatus(`Failed to load library: ${e}`);
     }
-  }, [view, query, sort, showStatus]);
+  }, [view, query, sort, showStatus, source]);
 
   // Debounced refresh on view/search/sort change.
   const debounce = useRef<number | undefined>(undefined);
@@ -139,7 +151,9 @@ export default function App() {
       ipc.onPlaybackState(setPlayState),
       ipc.onRecordingState(setRecState),
       ipc.onEnrichProgress(setEnrichProgress),
+      ipc.onBroadcastState((s) => setOnAir(s.state !== "idle")),
     ];
+    ipc.goLiveStatus().then((s) => setOnAir(s.state !== "idle")).catch(() => {});
     return () => {
       subs.forEach((p) => p.then((un) => un()));
     };
@@ -147,7 +161,11 @@ export default function App() {
 
   // Both per-row and batch enrich PROPOSE changes (no writes); the review
   // modal then lets the user approve per field before anything is applied.
-  const runProposal = async (ids: number[], singleId?: number) => {
+  const runProposal = async (
+    ids: number[],
+    singleId?: number,
+    mode: "enrich" | "clean" = "enrich",
+  ) => {
     if (ids.length === 0) return;
     try {
       if (singleId == null) {
@@ -168,12 +186,17 @@ export default function App() {
         current: "",
         capped: false,
       });
-      const report = await ipc.proposeEnrichment(ids);
+      const report =
+        mode === "clean"
+          ? await ipc.cleanTrackMetadata(ids)
+          : await ipc.proposeEnrichment(ids);
       if (report.proposals.length === 0) {
         showStatus(
-          report.total === 1
-            ? "No confident match found."
-            : `No matches found for ${report.total} track(s).`,
+          mode === "clean"
+            ? "Nothing to clean — titles already look tidy."
+            : report.total === 1
+              ? "No confident match found."
+              : `No matches found for ${report.total} track(s).`,
         );
       } else {
         setProposals(report.proposals);
@@ -188,6 +211,8 @@ export default function App() {
 
   const handleEnrichTrack = (track: Track) => runProposal([track.id], track.id);
   const handleEnrichAll = () => runProposal(tracks.map((t) => t.id));
+  const handleCleanAll = () =>
+    runProposal(tracks.map((t) => t.id), undefined, "clean");
 
   // ----- playback routing (the capability gate, UI side) -------------------
 
@@ -217,7 +242,9 @@ export default function App() {
           setPositionMs(0);
         } else if (
           track.capability === "STREAM_PLAYABLE" &&
-          (track.sourceKind === "youtube" || track.sourceKind === "radio")
+          (track.sourceKind === "youtube" ||
+            track.sourceKind === "radio" ||
+            track.sourceKind === "stream")
         ) {
           await ipc.stop().catch(() => {});
           setNow(null);
@@ -227,8 +254,10 @@ export default function App() {
           setStreamDur(0);
           setStreamSeek(null);
           setEngineStat(null);
-          // radio tracks keep the Radio panel open; others go to Library
-          if (track.sourceKind !== "radio") setSource("library");
+          // radio/stream keep their browse panel open; others go to Library
+          if (track.sourceKind !== "radio" && track.sourceKind !== "stream") {
+            setSource("library");
+          }
         } else {
           showStatus("This entry can only be opened externally.");
         }
@@ -300,12 +329,12 @@ export default function App() {
         setSource("library");
         return;
       }
-      if (next === "radio") {
-        // Browse panel; the engine stays idle until a station is played.
+      if (next === "radio" || next === "stream") {
+        // Browse panel; the engine stays idle until something is played.
         await ipc.stop().catch(() => {});
         setEngineStat(null);
         setNow(null);
-        setSource("radio");
+        setSource(next);
         return;
       }
       setStream(null);
@@ -406,7 +435,9 @@ export default function App() {
   };
 
   const lineIn =
-    source !== "library" && source !== "radio" ? (source as LineInSource) : null;
+    source !== "library" && source !== "radio" && source !== "stream"
+      ? (source as LineInSource)
+      : null;
 
   // The track the Now Playing panel describes: a live stream, else the
   // engine's loaded track.
@@ -447,36 +478,28 @@ export default function App() {
                   </option>
                 ))}
               </select>
-              <button
-                className="addurl-button"
-                onClick={() => setAddUrlOpen(true)}
-                title="Add a YouTube URL or mirror a Spotify playlist"
-              >
-                Add URL
-              </button>
-              {source === "library" && (
-                <button
-                  className="addurl-button enrich-all"
-                  onClick={handleEnrichAll}
-                  disabled={tracks.length === 0 || enrichProgress != null}
-                  title="Auto-fill tags for the visible tracks (free MusicBrainz/fingerprint first, AI only if configured)"
-                >
-                  <Sparkles size={14} /> Enrich
-                </button>
-              )}
-              <button className="import-button" onClick={handleImport} disabled={busy}>
-                {busy ? "Importing…" : "Import Folder"}
-              </button>
-              <button
-                className="addurl-button"
-                onClick={handleImportMpx}
-                disabled={busy}
-                title="Import a MusicPax .mpx playlist"
-              >
-                Import .mpx
-              </button>
+              <ManageMusicMenu
+                busy={busy}
+                canEnrich={source === "library" && tracks.length > 0 && enrichProgress == null}
+                onAir={onAir}
+                onImportFolder={handleImport}
+                onImportMpx={handleImportMpx}
+                onAddYouTube={() => setAddUrlMode("youtube")}
+                onAddSpotify={() => setAddUrlMode("spotify")}
+                onSearchYouTube={() => setYtSearchOpen(true)}
+                onClean={handleCleanAll}
+                onEnrich={handleEnrichAll}
+                onGoLive={() => setGoLiveOpen(true)}
+              />
             </>
           )}
+          <button
+            className="settings-button"
+            onClick={() => setSettingsOpen(true)}
+            title="Settings"
+          >
+            <SettingsIcon size={16} />
+          </button>
           <ModeMenu
             mode={mode}
             onMode={changeMode}
@@ -520,6 +543,45 @@ export default function App() {
           onInfo={showStatus}
           onError={showStatus}
         />
+      ) : source === "stream" ? (
+        <div className="library-layout stream-layout">
+          <div className="stream-col">
+            <StreamPanel
+              curator={curator}
+              onAdded={(t) => {
+                showStatus(`Added “${t.title ?? "stream"}” to the library`);
+                refreshTracks();
+              }}
+              onError={showStatus}
+            />
+            <LibraryTable
+              tracks={tracks}
+              searchable
+              query={query}
+              onQueryChange={setQuery}
+              sort={sort}
+              onSortChange={setSort}
+              onActivate={playTrack}
+              onEdit={setEditTrack}
+              onEnrich={handleEnrichTrack}
+              curator={curator}
+              enrichingId={enrichingId}
+              nowPlayingId={
+                stream ? stream.id : playState === "stopped" ? null : (now?.track.id ?? null)
+              }
+              playlists={playlists}
+              onAddToPlaylist={(playlistId, trackId) => {
+                ipc
+                  .addToPlaylist(playlistId, trackId)
+                  .then(() => {
+                    refreshPlaylists();
+                    showStatus("Added to playlist");
+                  })
+                  .catch((e) => showStatus(`${e}`));
+              }}
+            />
+          </div>
+        </div>
       ) : lineIn ? (
         <ReceiverPanel
           source={lineIn}
@@ -614,10 +676,30 @@ export default function App() {
 
       {stream && stream.sourceKind === "radio" && (
         <RadioPlayer
+          key={stream.uri}
           track={stream}
           playing={streamPlaying}
           volume={volume}
           onPlayingChange={setStreamPlaying}
+          onError={showStatus}
+        />
+      )}
+
+      {stream && stream.sourceKind === "stream" && (
+        <DirectStreamPlayer
+          key={stream.uri}
+          track={stream}
+          playing={streamPlaying}
+          volume={volume}
+          seekRequestMs={streamSeek}
+          onSeeked={() => setStreamSeek(null)}
+          onPlayingChange={setStreamPlaying}
+          onTime={(pos, dur) => {
+            setStreamPos(pos);
+            if (dur > 0) setStreamDur(dur);
+          }}
+          onEnded={() => playNext(stream.id)}
+          onClose={() => setStream(null)}
           onError={showStatus}
         />
       )}
@@ -680,13 +762,34 @@ export default function App() {
         />
       )}
 
-      {addUrlOpen && (
+      {addUrlMode && (
         <AddUrlModal
-          onClose={() => setAddUrlOpen(false)}
+          mode={addUrlMode}
+          onClose={() => setAddUrlMode(null)}
           onError={showStatus}
           onDone={(msg) => {
             showStatus(msg);
             refreshPlaylists();
+            refreshTracks();
+          }}
+        />
+      )}
+
+      {goLiveOpen && (
+        <GoLivePanel onClose={() => setGoLiveOpen(false)} onError={showStatus} />
+      )}
+
+      {ytSearchOpen && (
+        <YouTubeSearchView
+          onClose={() => setYtSearchOpen(false)}
+          onError={showStatus}
+          onInfo={(msg) => {
+            showStatus(msg);
+            refreshTracks();
+          }}
+          onPlay={(track) => {
+            setYtSearchOpen(false);
+            void playTrack(track);
             refreshTracks();
           }}
         />

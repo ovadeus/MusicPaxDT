@@ -4,6 +4,7 @@
 //! always re-confirmed against free MusicBrainz before being trusted.
 
 pub mod fingerprint;
+pub mod titleclean;
 
 use std::path::{Path, PathBuf};
 
@@ -103,6 +104,7 @@ pub async fn enrich_track(
                                     title: cleaned.title,
                                     artist: cleaned.artist,
                                     album: cleaned.album,
+                                    year: cleaned.year,
                                     genre: cleaned.genre,
                                     source: "llm".into(),
                                     confidence: 0.5,
@@ -123,6 +125,80 @@ pub async fn enrich_track(
     }
 
     Ok(EnrichOutcome::default())
+}
+
+/// "Clean Track Data": dissect a messy label into proper fields WITHOUT a
+/// MusicBrainz round-trip (these are often non-catalog YouTube uploads). The
+/// free offline heuristic runs first; the LLM refines the hard cases when
+/// configured and permitted. Only fields that differ from the track's current
+/// values are surfaced, so the review dialog shows real changes.
+pub async fn clean_metadata(
+    track: &Track,
+    cfg: &EnrichConfig,
+    allow_llm: bool,
+) -> Result<EnrichOutcome, String> {
+    let raw_title = match nonempty(&track.title) {
+        Some(t) => t.to_string(),
+        None => return Ok(EnrichOutcome::default()),
+    };
+    let raw_artist = nonempty(&track.artist).map(str::to_string);
+
+    // Free offline heuristic first.
+    let mut parsed = titleclean::clean(&raw_title, raw_artist.as_deref());
+    let mut used_llm = false;
+    let mut album: Option<String> = None;
+    let mut genre: Option<String> = None;
+
+    // LLM refines the gnarly cases when permitted/configured.
+    if allow_llm {
+        if let Some(llm) = &cfg.llm {
+            match llm.clean_metadata(&raw_title, raw_artist.as_deref()).await {
+                Ok(c) => {
+                    used_llm = true;
+                    if let Some(t) = c.title.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+                        parsed.title = Some(t.to_string());
+                    }
+                    if let Some(a) = c.artist.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+                        parsed.artist = Some(a.to_string());
+                    }
+                    if c.year.is_some() {
+                        parsed.year = c.year;
+                    }
+                    album = c.album.filter(|v| !v.trim().is_empty());
+                    genre = c.genre.filter(|v| !v.trim().is_empty());
+                }
+                Err(e) => eprintln!("clean LLM failed for {}: {e}", track.uri),
+            }
+        }
+    }
+
+    // Surface only fields that actually change something.
+    let title = parsed.title.filter(|v| Some(v.as_str()) != track.title.as_deref());
+    let artist = parsed.artist.filter(|v| Some(v.as_str()) != track.artist.as_deref());
+    let year = parsed.year.filter(|y| Some(*y) != track.year);
+    let album = album.filter(|v| Some(v.as_str()) != track.album.as_deref());
+    let genre = genre.filter(|v| Some(v.as_str()) != track.genre.as_deref());
+
+    if title.is_none() && artist.is_none() && year.is_none() && album.is_none() && genre.is_none() {
+        return Ok(EnrichOutcome {
+            suggestion: None,
+            used_llm,
+        });
+    }
+
+    Ok(EnrichOutcome {
+        suggestion: Some(MetadataSuggestion {
+            title,
+            artist,
+            album,
+            year,
+            genre,
+            source: if used_llm { "clean+llm".into() } else { "clean".into() },
+            confidence: if used_llm { 0.8 } else { 0.65 },
+            ..Default::default()
+        }),
+        used_llm,
+    })
 }
 
 /// Download cover art to `dest` (PNG/JPEG bytes as served). Best-effort.

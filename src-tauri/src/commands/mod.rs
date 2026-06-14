@@ -1,3 +1,4 @@
+pub mod broadcast;
 pub mod enrich;
 pub mod streams;
 
@@ -80,14 +81,45 @@ pub async fn list_tracks(
     .map_err(|e| AppError::Other(format!("query task failed: {e}")))?
 }
 
-/// Artist mini-biography from Wikipedia (free, no key) for the Now Playing panel.
+fn artist_bio_key(artist: &str) -> String {
+    format!("artistbio.{}", artist.trim().to_lowercase())
+}
+
+/// Artist mini-biography for the Now Playing panel. A Curator-saved override
+/// wins; otherwise we fetch Wikipedia's free summary (music-disambiguated so
+/// e.g. "Chicago" resolves to the band, not the city).
 #[tauri::command]
 pub async fn artist_bio(
     artist: String,
+    state: State<'_, AppState>,
 ) -> AppResult<Option<crate::sources::wikipedia::ArtistBio>> {
+    let override_text = {
+        let conn = lock_unpoisoned(&state.db);
+        db::get_setting(&conn, &artist_bio_key(&artist))?.filter(|s| !s.trim().is_empty())
+    };
+    if let Some(text) = override_text {
+        return Ok(Some(crate::sources::wikipedia::ArtistBio {
+            extract: text,
+            thumbnail: None,
+            url: None,
+            title: artist.trim().to_string(),
+        }));
+    }
     crate::sources::wikipedia::artist_bio(&artist)
         .await
         .map_err(AppError::Other)
+}
+
+/// Save (or clear, when empty) a Curator override for an artist's bio.
+#[tauri::command]
+pub async fn set_artist_bio(
+    artist: String,
+    extract: String,
+    state: State<'_, AppState>,
+) -> AppResult<()> {
+    let conn = lock_unpoisoned(&state.db);
+    db::set_setting(&conn, &artist_bio_key(&artist), extract.trim())?;
+    Ok(())
 }
 
 /// Read a local image file and return it as a `data:` URL. Used for custom

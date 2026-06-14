@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { RadioTower, SquarePlay, Volume2, VolumeX } from "lucide-react";
+import { Music, RadioTower, SquarePlay, Volume2, VolumeX } from "lucide-react";
 import { formatDuration } from "./LibraryTable";
 import TransportControls from "./TransportControls";
 import VuMeter from "./VuMeter";
@@ -57,6 +57,8 @@ export default function NowPlayingBar(props: Props) {
               {track.capability === "STREAM_PLAYABLE" &&
                 (track.sourceKind === "youtube" ? (
                   <SquarePlay size={13} className="np-stream-icon" />
+                ) : track.sourceKind === "stream" ? (
+                  <Music size={13} className="np-stream-icon" />
                 ) : (
                   <RadioTower size={13} className="np-stream-icon" />
                 ))}

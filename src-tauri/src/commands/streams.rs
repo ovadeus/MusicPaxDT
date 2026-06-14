@@ -57,6 +57,48 @@ pub fn set_spotify_credentials(client_id: String, client_secret: String) -> AppR
 // Internet radio (Radio Browser) — browse, search, add to library
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct YtSearchResult {
+    pub video_id: String,
+    pub title: String,
+    pub channel: String,
+    pub duration_ms: Option<u64>,
+    pub published: Option<String>,
+    pub url: String,
+}
+
+/// Search YouTube for videos. Uses the user's Data API key when configured,
+/// otherwise the keyless web fallback. `sort` is one of relevance|date|views|
+/// rating. Results are STREAM_PLAYABLE candidates.
+#[tauri::command]
+pub async fn youtube_search(
+    query: String,
+    sort: Option<String>,
+) -> AppResult<Vec<YtSearchResult>> {
+    let q = query.trim();
+    if q.is_empty() {
+        return Ok(Vec::new());
+    }
+    let order = youtube::SortOrder::parse(sort.as_deref());
+    let candidates = match keyring_get("youtube_api_key") {
+        Some(key) => youtube::search(http(), &key, q, 12, order).await,
+        None => youtube::search_keyless(http(), q, order).await,
+    }
+    .map_err(AppError::Other)?;
+    Ok(candidates
+        .into_iter()
+        .map(|c| YtSearchResult {
+            url: youtube::watch_url(&c.video_id),
+            video_id: c.video_id,
+            title: c.title,
+            channel: c.channel,
+            duration_ms: c.duration_ms,
+            published: c.published,
+        })
+        .collect())
+}
+
 #[tauri::command]
 pub async fn radio_top(limit: Option<u32>) -> AppResult<Vec<RadioStation>> {
     radio::top(limit.unwrap_or(60)).await.map_err(AppError::Other)
@@ -146,6 +188,116 @@ pub async fn import_stream_url(url: String, state: State<'_, AppState>) -> AppRe
 }
 
 // ---------------------------------------------------------------------------
+// Direct stream URLs (Archive.org & friends) — any direct audio/video file.
+// ---------------------------------------------------------------------------
+
+const AUDIO_EXTS: &[&str] = &[
+    "mp3", "m4a", "aac", "ogg", "oga", "opus", "wav", "flac", "aiff", "aif", "wma",
+];
+const VIDEO_EXTS: &[&str] = &["mp4", "m4v", "webm", "mov", "mkv", "avi", "ogv"];
+
+/// Minimal percent-decoding for turning a URL filename into a readable title.
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(b) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(b);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(if bytes[i] == b'+' { b' ' } else { bytes[i] });
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn url_path(url: &str) -> &str {
+    url.split(['?', '#']).next().unwrap_or(url)
+}
+
+/// "audio" / "video" by file extension, or None when unknown.
+fn media_kind_by_ext(url: &str) -> Option<&'static str> {
+    let ext = url_path(url).rsplit('.').next().unwrap_or("").to_lowercase();
+    if AUDIO_EXTS.contains(&ext.as_str()) {
+        Some("audio")
+    } else if VIDEO_EXTS.contains(&ext.as_str()) {
+        Some("video")
+    } else {
+        None
+    }
+}
+
+/// Readable title from the URL's last path segment (percent-decoded, no ext).
+fn title_from_url(url: &str) -> String {
+    let seg = url_path(url).rsplit('/').next().unwrap_or("");
+    let decoded = percent_decode(seg);
+    match decoded.rsplit_once('.') {
+        Some((stem, ext)) if (AUDIO_EXTS.contains(&ext.to_lowercase().as_str())
+            || VIDEO_EXTS.contains(&ext.to_lowercase().as_str())) =>
+        {
+            stem.to_string()
+        }
+        _ => decoded,
+    }
+    .trim()
+    .to_string()
+}
+
+/// Best-effort content-type probe for URLs without a media extension.
+async fn probe_media_type(url: &str) -> Option<&'static str> {
+    let resp = http().head(url).send().await.ok()?;
+    let ct = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)?
+        .to_str()
+        .ok()?
+        .to_lowercase();
+    if ct.starts_with("audio/") {
+        Some("audio")
+    } else if ct.starts_with("video/") {
+        Some("video")
+    } else {
+        None
+    }
+}
+
+/// Import a direct audio/video URL (e.g. an Archive.org file) as a
+/// STREAM_PLAYABLE library entry that plays inline via the webview — never
+/// decoded by the OWNED engine, so no DSP/recording (matches the radio lane).
+#[tauri::command]
+pub async fn import_direct_stream(url: String, state: State<'_, AppState>) -> AppResult<Track> {
+    let url = url.trim().to_string();
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(AppError::Other(
+            "Enter a direct http(s) link to an audio or video file".into(),
+        ));
+    }
+    // Validate it's a media file: by extension first (no network), else probe.
+    if media_kind_by_ext(&url).is_none() && probe_media_type(&url).await.is_none() {
+        return Err(AppError::Other(
+            "That doesn't look like a direct audio/video file (mp3, mp4, ogg, wav, …)".into(),
+        ));
+    }
+    let title = title_from_url(&url);
+    let new_track = NewTrack {
+        title: Some(if title.is_empty() { "Stream".into() } else { title }),
+        artist: None,
+        album: None,
+        year: None,
+        genre: None,
+        duration_ms: None,
+        uri: url,
+        source_kind: "stream".into(),
+        capability: Capability::StreamPlayable,
+    };
+    insert_stream_track(&state, &new_track)
+}
+
+// ---------------------------------------------------------------------------
 // Mirror Engine v1 (heuristic matching; LLM ranking arrives with M5)
 // ---------------------------------------------------------------------------
 
@@ -172,8 +324,8 @@ async fn search_candidates(query: &str) -> Result<Vec<youtube::Candidate>, Strin
     // Official Data API when the user configured a key (most stable),
     // keyless web search otherwise (works out of the box).
     match keyring_get("youtube_api_key") {
-        Some(key) => youtube::search(http(), &key, query, 6).await,
-        None => youtube::search_keyless(http(), query).await,
+        Some(key) => youtube::search(http(), &key, query, 6, youtube::SortOrder::Relevance).await,
+        None => youtube::search_keyless(http(), query, youtube::SortOrder::Relevance).await,
     }
 }
 
@@ -469,4 +621,29 @@ pub async fn delete_playlist(playlist_id: i64, state: State<'_, AppState>) -> Ap
     })
     .await
     .map_err(|e| AppError::Other(format!("playlist task failed: {e}")))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derives_title_from_archive_org_url() {
+        let url = "https://archive.org/download/the-shadow-radio-show-1937-1954-old-time-radio-all-available-episodes/1937-09-26%20-%20Death%20House%20Rescue.mp3";
+        assert_eq!(title_from_url(url), "1937-09-26 - Death House Rescue");
+        assert_eq!(media_kind_by_ext(url), Some("audio"));
+    }
+
+    #[test]
+    fn detects_video_and_unknown_extensions() {
+        assert_eq!(media_kind_by_ext("https://x.com/clip.mp4"), Some("video"));
+        assert_eq!(media_kind_by_ext("https://x.com/song.OGG?x=1"), Some("audio"));
+        assert_eq!(media_kind_by_ext("https://x.com/page.html"), None);
+    }
+
+    #[test]
+    fn percent_decoding_handles_spaces_and_specials() {
+        assert_eq!(percent_decode("a%20b%2Dc"), "a b-c");
+        assert_eq!(percent_decode("plus+space"), "plus space");
+    }
 }

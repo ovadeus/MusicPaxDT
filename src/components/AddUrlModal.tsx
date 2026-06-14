@@ -3,15 +3,36 @@ import { X } from "lucide-react";
 import * as ipc from "../lib/ipc";
 import type { MirrorProgress } from "../lib/types";
 
+type AddUrlMode = "youtube" | "spotify";
+
 interface Props {
+  mode: AddUrlMode;
   onClose: () => void;
   onError: (message: string) => void;
   onDone: (message: string) => void;
 }
 
+const COPY: Record<
+  AddUrlMode,
+  { title: string; placeholder: string; hint: string }
+> = {
+  youtube: {
+    title: "Add YouTube URL",
+    placeholder: "Paste a YouTube video URL (https://www.youtube.com/watch?v=…)",
+    hint: "Imports the video as a 📺 STREAM_PLAYABLE track that plays in the official YouTube player.",
+  },
+  spotify: {
+    title: "Add Spotify Playlist",
+    placeholder:
+      "Paste a Spotify playlist URL — or an Artist - Title list, one per line",
+    hint: "Mirrors the playlist to YouTube streams (public playlists need no Spotify key; add credentials in Settings for private/long ones).",
+  },
+};
+
 /// Paste a YouTube link (single track), a Spotify playlist URL, or an
 /// "Artist - Title" list / Exportify CSV (mirrored to YouTube streams).
-export default function AddUrlModal({ onClose, onError, onDone }: Props) {
+export default function AddUrlModal({ mode, onClose, onError, onDone }: Props) {
+  const copy = COPY[mode];
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<MirrorProgress | null>(null);
@@ -63,7 +84,7 @@ export default function AddUrlModal({ onClose, onError, onDone }: Props) {
     <div className="settings-overlay" onClick={busy ? undefined : onClose}>
       <div className="settings-panel" onClick={(e) => e.stopPropagation()}>
         <div className="settings-header">
-          <h2>Add URL / Mirror playlist</h2>
+          <h2>{copy.title}</h2>
           <button className="settings-close" onClick={onClose} disabled={busy} title="Close">
             <X size={15} />
           </button>
@@ -71,11 +92,10 @@ export default function AddUrlModal({ onClose, onError, onDone }: Props) {
 
         <textarea
           className="addurl-input"
-          rows={6}
-          placeholder={
-            "Paste one of:\n• a YouTube video URL\n• a Spotify playlist URL (mirrors to YouTube streams)\n• an Artist - Title list, one per line (or Exportify CSV)"
-          }
+          rows={mode === "spotify" ? 6 : 2}
+          placeholder={copy.placeholder}
           value={input}
+          autoFocus
           onChange={(e) => setInput(e.target.value)}
           disabled={busy}
         />
@@ -97,18 +117,11 @@ export default function AddUrlModal({ onClose, onError, onDone }: Props) {
 
         <div className="addurl-actions">
           <button className="import-button" onClick={submit} disabled={busy || !input.trim()}>
-            {busy ? "Working…" : "Add / Mirror"}
+            {busy ? "Working…" : mode === "spotify" ? "Mirror" : "Add"}
           </button>
         </div>
 
-        <p className="settings-hint">
-          Streams play through the official YouTube player (STREAM PLAYABLE — no
-          EQ, no recording). Mirroring creates a playlist with the same name and
-          works with no setup: public Spotify playlists are read straight from the
-          page (first ~100 tracks). Optional, in Settings → Integrations: Spotify
-          credentials for full-length playlists, a YouTube API key for the most
-          reliable matching.
-        </p>
+        <p className="settings-hint">{copy.hint}</p>
       </div>
     </div>
   );

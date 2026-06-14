@@ -78,6 +78,46 @@ pub struct Candidate {
     pub title: String,
     pub channel: String,
     pub duration_ms: Option<u64>,
+    /// Human "published" string, e.g. "9 years ago" (keyless) — for display.
+    pub published: Option<String>,
+}
+
+/// Result ordering shared by the keyed and keyless search paths.
+#[derive(Debug, Clone, Copy)]
+pub enum SortOrder {
+    Relevance,
+    Date,
+    Views,
+    Rating,
+}
+
+impl SortOrder {
+    pub fn parse(s: Option<&str>) -> SortOrder {
+        match s.unwrap_or("relevance") {
+            "date" => SortOrder::Date,
+            "views" => SortOrder::Views,
+            "rating" => SortOrder::Rating,
+            _ => SortOrder::Relevance,
+        }
+    }
+    /// Data API v3 `order` value.
+    fn api_order(self) -> &'static str {
+        match self {
+            SortOrder::Relevance => "relevance",
+            SortOrder::Date => "date",
+            SortOrder::Views => "viewCount",
+            SortOrder::Rating => "rating",
+        }
+    }
+    /// Innertube `params` sort token (empty = relevance/default).
+    fn innertube_params(self) -> &'static str {
+        match self {
+            SortOrder::Relevance => "",
+            SortOrder::Date => "CAISAhAB",
+            SortOrder::Views => "CAMSAhAB",
+            SortOrder::Rating => "CAESAhAB",
+        }
+    }
 }
 
 /// Search YouTube (Data API v3, user's key) and fetch candidate durations.
@@ -86,6 +126,7 @@ pub async fn search(
     api_key: &str,
     query: &str,
     max_results: u32,
+    sort: SortOrder,
 ) -> Result<Vec<Candidate>, String> {
     #[derive(Deserialize)]
     struct SearchResp {
@@ -107,6 +148,8 @@ pub async fn search(
         title: String,
         #[serde(rename = "channelTitle")]
         channel_title: String,
+        #[serde(rename = "publishedAt")]
+        published_at: Option<String>,
     }
 
     let resp = client
@@ -114,6 +157,7 @@ pub async fn search(
         .query(&[
             ("part", "snippet"),
             ("type", "video"),
+            ("order", sort.api_order()),
             ("q", query),
             ("maxResults", &max_results.to_string()),
             ("key", api_key),
@@ -139,6 +183,7 @@ pub async fn search(
                 title: i.snippet.title,
                 channel: i.snippet.channel_title,
                 duration_ms: None,
+                published: i.snippet.published_at,
             })
         })
         .collect();
@@ -192,16 +237,21 @@ pub async fn search(
 pub async fn search_keyless(
     client: &reqwest::Client,
     query: &str,
+    sort: SortOrder,
 ) -> Result<Vec<Candidate>, String> {
     // Public web-client key embedded in youtube.com pages (not a user secret).
     const WEB_KEY: &str = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8";
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "context": {
             "client": { "clientName": "WEB", "clientVersion": "2.20240101.00.00" }
         },
         "query": query,
         // music category filter param is brittle; rely on scoring instead
     });
+    let params = sort.innertube_params();
+    if !params.is_empty() {
+        body["params"] = serde_json::Value::String(params.to_string());
+    }
     let resp = client
         .post(format!(
             "https://www.youtube.com/youtubei/v1/search?key={WEB_KEY}&prettyPrint=false"
@@ -266,11 +316,16 @@ fn video_renderer_to_candidate(vr: &serde_json::Value) -> Option<Candidate> {
         .pointer("/lengthText/simpleText")
         .and_then(|v| v.as_str())
         .and_then(parse_clock_duration);
+    let published = vr
+        .pointer("/publishedTimeText/simpleText")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
     Some(Candidate {
         video_id,
         title,
         channel,
         duration_ms,
+        published,
     })
 }
 
@@ -426,6 +481,7 @@ mod tests {
             title: title.into(),
             channel: channel.into(),
             duration_ms: Some(secs * 1000),
+            published: None,
         }
     }
 

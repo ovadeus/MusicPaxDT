@@ -28,6 +28,8 @@ export default function NowPlayingPanel({ track, curator, onCollapse, onError }:
   const [editingLoop, setEditingLoop] = useState(false);
   const [loopDraft, setLoopDraft] = useState("");
   const [imgFailed, setImgFailed] = useState(false);
+  const [editingBio, setEditingBio] = useState(false);
+  const [bioDraft, setBioDraft] = useState("");
 
   const artist = track?.artist ?? null;
   const trackId = track?.id ?? null;
@@ -35,6 +37,7 @@ export default function NowPlayingPanel({ track, curator, onCollapse, onError }:
   // Fetch the artist bio when the artist changes.
   useEffect(() => {
     setBio(null);
+    setEditingBio(false);
     if (!artist) return;
     let cancelled = false;
     setBioLoading(true);
@@ -47,6 +50,17 @@ export default function NowPlayingPanel({ track, curator, onCollapse, onError }:
       cancelled = true;
     };
   }, [artist]);
+
+  const saveBio = async () => {
+    if (!artist) return;
+    try {
+      await ipc.setArtistBio(artist, bioDraft);
+      setEditingBio(false);
+      setBio(await ipc.artistBio(artist));
+    } catch (e) {
+      onError(`${e}`);
+    }
+  };
 
   // Load this track's saved loop-video URL (settings: loopvideo.<id>).
   const loadedFor = useRef<number | null>(null);
@@ -162,18 +176,58 @@ export default function NowPlayingPanel({ track, curator, onCollapse, onError }:
 
           <div className="np-bio">
             {bioLoading && <p className="np-bio-loading">Loading bio…</p>}
-            {!bioLoading && bio && (
-              <>
-                <p className="np-bio-text">{bio.extract}</p>
-                {bio.url && (
-                  <a className="np-bio-link" href={bio.url} target="_blank" rel="noreferrer">
-                    Wikipedia <ExternalLink size={11} />
-                  </a>
-                )}
-              </>
-            )}
-            {!bioLoading && !bio && artist && (
-              <p className="np-bio-loading">No biography found.</p>
+            {!bioLoading && editingBio ? (
+              <div className="np-bio-edit">
+                <textarea
+                  className="np-bio-textarea"
+                  rows={7}
+                  placeholder="Write a short artist bio…"
+                  value={bioDraft}
+                  autoFocus
+                  onChange={(e) => setBioDraft(e.target.value)}
+                />
+                <div className="np-bio-actions">
+                  <button className="np-loop-save" onClick={saveBio}>
+                    Save
+                  </button>
+                  <button className="np-bio-cancel" onClick={() => setEditingBio(false)}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              !bioLoading && (
+                <>
+                  {bio ? (
+                    <>
+                      <p className="np-bio-text">{bio.extract}</p>
+                      {bio.url && (
+                        <a
+                          className="np-bio-link"
+                          href={bio.url}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Wikipedia <ExternalLink size={11} />
+                        </a>
+                      )}
+                    </>
+                  ) : (
+                    artist && <p className="np-bio-loading">No biography found.</p>
+                  )}
+                  {curator && artist && (
+                    <button
+                      className="np-bio-editbtn"
+                      onClick={() => {
+                        setBioDraft(bio?.extract ?? "");
+                        setEditingBio(true);
+                      }}
+                    >
+                      {bio ? "Edit bio" : "Add bio"}
+                    </button>
+                  )}
+                </>
+              )
             )}
           </div>
         </div>

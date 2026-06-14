@@ -255,6 +255,87 @@ pub async fn propose_enrichment(
     })
 }
 
+/// "Clean Track Data": dissect messy labels (e.g. junky YouTube titles) into
+/// proper title/artist/year fields and RETURN proposals without writing. Uses
+/// the free heuristic first, the LLM only when configured/permitted (capped),
+/// and no MusicBrainz lookups — so it's fast and works on non-catalog uploads.
+#[tauri::command]
+pub async fn clean_track_metadata(
+    track_ids: Vec<i64>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> AppResult<EnrichProposeReport> {
+    let db = state.db.clone();
+    let (cfg, cap) = {
+        let conn = lock_unpoisoned(&db);
+        (build_config(&conn)?, spend_cap_usd(&conn))
+    };
+    let per_call = cfg.llm.as_ref().map(|l| l.estimate_cost_usd()).unwrap_or(0.0);
+
+    let total = track_ids.len();
+    let mut proposals = Vec::new();
+    let mut spent = 0.0f64;
+    let mut capped = false;
+
+    for (i, id) in track_ids.into_iter().enumerate() {
+        let track = {
+            let conn = lock_unpoisoned(&db);
+            match db::get_track(&conn, id) {
+                Ok(t) => t,
+                Err(_) => continue,
+            }
+        };
+        let label = track.title.clone().unwrap_or_else(|| format!("track {id}"));
+        let allow_llm = !capped && (spent + per_call) <= cap;
+
+        let _ = app.emit(
+            "enrich-progress",
+            EnrichProgress {
+                done: i,
+                total,
+                proposed: proposals.len(),
+                spent_usd: spent,
+                current: label,
+                capped,
+            },
+        );
+
+        match enrich::clean_metadata(&track, &cfg, allow_llm).await {
+            Ok(outcome) => {
+                if outcome.used_llm {
+                    spent += per_call;
+                    if spent + per_call > cap {
+                        capped = true;
+                    }
+                }
+                if let Some(suggestion) = outcome.suggestion {
+                    proposals.push(EnrichProposal { track, suggestion });
+                }
+            }
+            Err(e) => eprintln!("clean {id} failed: {e}"),
+        }
+    }
+
+    let _ = app.emit(
+        "enrich-progress",
+        EnrichProgress {
+            done: total,
+            total,
+            proposed: proposals.len(),
+            spent_usd: spent,
+            current: String::new(),
+            capped,
+        },
+    );
+
+    Ok(EnrichProposeReport {
+        proposals,
+        total,
+        spent_usd: spent,
+        capped,
+    })
+}
+
 /// One approved edit from the review dialog. Each field carries the final
 /// value to set, or null to leave the track's current value untouched.
 #[derive(Debug, Clone, serde::Deserialize)]

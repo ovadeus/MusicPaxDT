@@ -51,12 +51,27 @@ thiserror.
       RIAA EQ toggle, tone stack, source routing, recording of OWNED sources.
 - M3  Internet radio (Radio Browser) ✅ done (2026-06-13) — browse/search +
       inline STREAM_PLAYABLE playback via webview <audio> + add-to-library.
-      Still to do: podcasts/RSS + CC catalogs (Bandcamp/FMA/Jamendo).  ← next
+- M3b Direct streams ✅ done (2026-06-13) — "Stream" source: paste any direct
+      audio/video URL (Archive.org etc.) → import_direct_stream validates by
+      extension (else HEAD content-type), STREAM_PLAYABLE source_kind="stream",
+      music-note icon. Plays inline via DirectStreamPlayer (<video> for audio+
+      video; seekable, real VU when CORS allows). Still to do: podcasts/RSS + CC
+      catalogs (Bandcamp/FMA/Jamendo).
 - M5a (pulled forward 2026-06-12 by owner): YouTube embed lane + Mirror Engine
       v1 (Spotify playlist / text list → official YouTube embeds, heuristic
       matching, keyless search fallback) + playlists mixing OWNED and
       STREAM_PLAYABLE + Integrations settings (keyring). LLM match-ranking
       still lands with M5.
+- M-live Go Live broadcaster ✅ done (2026-06-13) — Icecast2 SOURCE client
+      (audio/broadcast.rs) that tees the engine's unified output mix (post-volume
+      stereo in build_stream_for), MP3-encodes (reuses sinks::build_mp3_encoder),
+      and streams to Radio King / any Icecast mount. Survives track changes (worker
+      drains whichever bcast_cons is registered) and pads idle/underrun with
+      silence to keep the connection alive. Only OWNED + line-in air; STREAM_PLAYABLE
+      (YouTube/radio) is in the webview, never in the tee. Creds: live.* in settings,
+      source password in keychain (radioking_source_password). Recommended setup:
+      RØDECaster mixes mic+music in hardware → its program is the aux/line-in source.
+      TODO: Shoutcast handshake, AAC/Ogg, Radio King stats API (listeners/metadata).
 - M4  DJ mode: dual decks, crossfader, EQ, tempo, hot cues, loops; BPM/key.
 - M5  AI subsystem (Anthropic/OpenAI/Ollama) + fingerprint pipeline + Mirror
       Engine + embedded YouTube playback lane.

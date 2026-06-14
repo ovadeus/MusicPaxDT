@@ -37,6 +37,7 @@ pub fn run() {
             app.manage(state::AppState {
                 db: Arc::new(Mutex::new(conn)),
                 engine,
+                broadcaster: Arc::new(audio::broadcast::Broadcaster::default()),
             });
 
             let url = if cfg!(dev) {
@@ -58,6 +59,7 @@ pub fn run() {
             commands::delete_track,
             commands::read_image_data_url,
             commands::artist_bio,
+            commands::set_artist_bio,
             commands::get_audio_devices,
             commands::set_output_device,
             commands::load_track,
@@ -82,6 +84,7 @@ pub fn run() {
             commands::streams::set_youtube_api_key,
             commands::streams::set_spotify_credentials,
             commands::streams::import_stream_url,
+            commands::streams::import_direct_stream,
             commands::streams::mirror_playlist,
             commands::streams::radio_top,
             commands::streams::radio_search,
@@ -93,13 +96,20 @@ pub fn run() {
             commands::streams::add_to_playlist,
             commands::streams::delete_playlist,
             commands::streams::import_mpx_playlist,
+            commands::streams::youtube_search,
             commands::enrich::enrich_integration_status,
             commands::enrich::set_acoustid_key,
             commands::enrich::set_anthropic_key,
             commands::enrich::set_openai_key,
             commands::enrich::propose_enrichment,
+            commands::enrich::clean_track_metadata,
             commands::enrich::apply_enrichment,
             commands::enrich::enrich_cost_estimate,
+            commands::broadcast::get_broadcast_config,
+            commands::broadcast::set_broadcast_password,
+            commands::broadcast::go_live_start,
+            commands::broadcast::go_live_stop,
+            commands::broadcast::go_live_status,
         ])
         .build(tauri::generate_context!());
 

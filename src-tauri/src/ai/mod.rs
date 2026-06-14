@@ -25,16 +25,25 @@ pub struct CleanedTags {
     pub artist: Option<String>,
     pub title: Option<String>,
     pub album: Option<String>,
+    pub year: Option<i64>,
     pub genre: Option<String>,
 }
 
 const SYSTEM: &str = "You normalize messy music track labels into clean metadata. \
 Given a raw title (often a YouTube video title with extra junk: channel names, \
-'[Official Video]', emojis, view counts, 'HD', track lists, etc.) and an optional \
-raw artist, extract the single most likely song. Respond with ONLY a JSON object, \
-no prose, of the form {\"artist\": string|null, \"title\": string|null, \"album\": \
-string|null, \"genre\": string|null}. Use null when unsure. Do not invent an album \
-or genre you are not confident about — those are better resolved elsewhere.";
+'[Official Video]', emojis, view counts, 'HD', track lists, uploader self-promo \
+like 'by CC & LPA', 'Original 1972 release', etc.) and an optional raw artist, \
+extract the single most likely song. Put ONLY the clean song name in \"title\" \
+(strip trailing 'by ...' promos and parentheticals like '(Official Video)') and \
+the performing artist in \"artist\". If the raw artist is a distributor or \
+auto-generated credit (e.g. 'Provided to YouTube by ...', 'Radial by The \
+Orchard', 'The Orchard', 'Believe', 'DistroKid', '... - Topic', 'Various \
+Artists'), ignore it and use the real artist from the title. If a release year \
+is present anywhere, return it as an integer in \"year\". Respond with ONLY a \
+JSON object, no prose, of the form {\"artist\": string|null, \"title\": \
+string|null, \"album\": string|null, \"year\": number|null, \"genre\": \
+string|null}. Use null when unsure. Do not invent an album or genre you are not \
+confident about.";
 
 fn build_prompt(raw_title: &str, raw_artist: Option<&str>) -> String {
     match raw_artist {

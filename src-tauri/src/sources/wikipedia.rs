@@ -36,15 +36,19 @@ struct Desktop {
     page: Option<String>,
 }
 
-/// Title candidates to try, in order — musicians often live at a
-/// disambiguated title rather than the bare name.
+/// Title candidates to try, in order. Music-disambiguated titles come FIRST so
+/// ambiguous names resolve to the artist, not something else — e.g. "Chicago"
+/// must hit "Chicago (band)", never the city. The bare name is the last resort
+/// (for artists whose page has no disambiguator, like "Radiohead").
 pub fn title_candidates(artist: &str) -> Vec<String> {
     let a = artist.trim();
     vec![
-        a.to_string(),
-        format!("{a} (musician)"),
         format!("{a} (band)"),
+        format!("{a} (musician)"),
         format!("{a} (singer)"),
+        format!("{a} (rapper)"),
+        format!("{a} (musical group)"),
+        a.to_string(),
     ]
 }
 
@@ -113,9 +117,13 @@ mod tests {
 
     #[test]
     fn builds_title_candidates() {
-        let c = title_candidates("Queen");
-        assert_eq!(c[0], "Queen");
-        assert!(c.contains(&"Queen (band)".to_string()));
+        let c = title_candidates("Chicago");
+        // Music-disambiguated titles must precede the bare name so "Chicago"
+        // resolves to the band, not the city.
+        assert_eq!(c[0], "Chicago (band)");
+        assert!(c.contains(&"Chicago (musician)".to_string()));
+        assert_eq!(c.last().unwrap(), "Chicago");
+        assert!(c.iter().position(|t| t == "Chicago (band)").unwrap() < c.len() - 1);
     }
 
     #[test]

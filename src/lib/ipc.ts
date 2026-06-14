@@ -75,6 +75,12 @@ export function artistBio(artist: string): Promise<ArtistBio | null> {
   return invoke<ArtistBio | null>("artist_bio", { artist });
 }
 
+/// Curator override for an artist's bio. Empty `extract` clears it (reverts to
+/// the Wikipedia summary).
+export function setArtistBio(artist: string, extract: string): Promise<void> {
+  return invoke<void>("set_artist_bio", { artist, extract });
+}
+
 export function getAudioDevices(): Promise<AudioDevice[]> {
   return invoke<AudioDevice[]>("get_audio_devices");
 }
@@ -196,6 +202,15 @@ export function applyEnrichment(edits: ApprovedEdit[]): Promise<number> {
   return invoke<number>("apply_enrichment", { edits });
 }
 
+/// "Clean Track Data": dissect messy YouTube-style titles into proper
+/// title/artist/year fields (heuristic first, LLM if configured). Returns
+/// proposals for the same review dialog as Enrich; nothing is written yet.
+export function cleanTrackMetadata(
+  trackIds: number[],
+): Promise<EnrichProposeReport> {
+  return invoke<EnrichProposeReport>("clean_track_metadata", { trackIds });
+}
+
 export function enrichCostEstimate(count: number): Promise<number> {
   return invoke<number>("enrich_cost_estimate", { count });
 }
@@ -212,8 +227,32 @@ export function importStreamUrl(url: string): Promise<Track> {
   return invoke<Track>("import_stream_url", { url });
 }
 
+export interface YtSearchResult {
+  videoId: string;
+  title: string;
+  channel: string;
+  durationMs: number | null;
+  published: string | null;
+  url: string;
+}
+
+export type YtSort = "relevance" | "date" | "views" | "rating";
+
+export function youtubeSearch(
+  query: string,
+  sort: YtSort = "relevance",
+): Promise<YtSearchResult[]> {
+  return invoke<YtSearchResult[]>("youtube_search", { query, sort });
+}
+
 export function mirrorPlaylist(input: string): Promise<MirrorReport> {
   return invoke<MirrorReport>("mirror_playlist", { input });
+}
+
+/// Import a direct audio/video URL (e.g. an Archive.org file) as a
+/// STREAM_PLAYABLE library track (source_kind "stream").
+export function importDirectStream(url: string): Promise<Track> {
+  return invoke<Track>("import_direct_stream", { url });
 }
 
 export function onMirrorProgress(
@@ -289,6 +328,66 @@ export function setSpotifyCredentials(
   clientSecret: string,
 ): Promise<void> {
   return invoke<void>("set_spotify_credentials", { clientId, clientSecret });
+}
+
+// --- Go Live (Icecast broadcaster) ----------------------------------------
+
+export interface BroadcastConfig {
+  host: string;
+  port: number;
+  mount: string;
+  username: string;
+  bitrate: number;
+  name: string;
+  description: string;
+  genre: string;
+  url: string;
+  public: boolean;
+}
+
+export interface BroadcastSettings extends BroadcastConfig {
+  hasPassword: boolean;
+}
+
+export type BroadcastState =
+  | "idle"
+  | "connecting"
+  | "live"
+  | "reconnecting"
+  | "error";
+
+export interface BroadcastStatus {
+  state: BroadcastState;
+  elapsedMs: number;
+  sentBytes: number;
+  bitrate: number;
+  message: string;
+}
+
+export function getBroadcastConfig(): Promise<BroadcastSettings> {
+  return invoke<BroadcastSettings>("get_broadcast_config");
+}
+
+export function setBroadcastPassword(password: string): Promise<void> {
+  return invoke<void>("set_broadcast_password", { password });
+}
+
+export function goLiveStart(config: BroadcastConfig): Promise<BroadcastStatus> {
+  return invoke<BroadcastStatus>("go_live_start", { config });
+}
+
+export function goLiveStop(): Promise<BroadcastStatus> {
+  return invoke<BroadcastStatus>("go_live_stop");
+}
+
+export function goLiveStatus(): Promise<BroadcastStatus> {
+  return invoke<BroadcastStatus>("go_live_status");
+}
+
+export function onBroadcastState(
+  cb: (status: BroadcastStatus) => void,
+): Promise<UnlistenFn> {
+  return listen<BroadcastStatus>("broadcast-state", (e) => cb(e.payload));
 }
 
 // --- engine events -------------------------------------------------------

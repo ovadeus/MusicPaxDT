@@ -3,9 +3,11 @@ import {
   Disc3,
   Flag,
   Link as LinkIcon,
+  Music,
   Pencil,
   RadioTower,
   Sparkles,
+  Square,
   SquarePlay,
 } from "lucide-react";
 import type { PlaylistInfo, SortField, SortSpec, Track } from "../lib/types";
@@ -42,12 +44,19 @@ export function capabilityIcon(t: Track): {
         label: "OWNED — local audio, can decode, mix and record",
         className: "cap-owned",
       };
-    case "STREAM_PLAYABLE":
+    case "STREAM_PLAYABLE": {
+      const Icon =
+        t.sourceKind === "youtube"
+          ? SquarePlay
+          : t.sourceKind === "stream"
+            ? Music
+            : RadioTower;
       return {
-        Icon: t.sourceKind === "youtube" ? SquarePlay : RadioTower,
+        Icon,
         label: "STREAM PLAYABLE — plays inline only, no DSP or recording",
         className: t.sourceKind === "youtube" ? "cap-youtube" : "cap-stream",
       };
+    }
     default:
       return {
         Icon: LinkIcon,
@@ -88,6 +97,18 @@ const COLUMNS: Column[] = [
 // Below this content width, drop Album/Genre/Year to keep Title/Artist/Length
 // readable (e.g. when the Now Playing panel is open on a small window).
 const COMPACT_WIDTH = 620;
+
+// Columns the user can manually collapse to a single icon to streamline the list.
+const COLLAPSIBLE: ReadonlySet<SortField> = new Set(["album", "genre", "year"]);
+const COLLAPSED_KEY = "library.collapsedCols";
+
+function loadCollapsed(): Set<SortField> {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(COLLAPSED_KEY) || "[]"));
+  } catch {
+    return new Set();
+  }
+}
 
 export function formatDuration(ms: number | null): string {
   if (ms == null || ms < 0) return "–:––";
@@ -131,6 +152,19 @@ export default function LibraryTable(props: Props) {
 
   const columns = compact ? COLUMNS.filter((c) => !c.hideWhenNarrow) : COLUMNS;
 
+  // Per-column collapse (Album/Genre/Year): show only the toggle square, hide
+  // the data, to streamline the list. Persisted across sessions.
+  const [collapsed, setCollapsed] = useState<Set<SortField>>(loadCollapsed);
+  const toggleCollapse = (field: SortField) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(field)) next.delete(field);
+      else next.add(field);
+      localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]));
+      return next;
+    });
+  };
+
   const toggleSort = (field: SortField) => {
     if (sort.field === field) {
       onSortChange({ field, dir: sort.dir === "asc" ? "desc" : "asc" });
@@ -166,16 +200,35 @@ export default function LibraryTable(props: Props) {
               <th className="cap-col" title="Capability">
                 <Flag size={12} />
               </th>
-              {columns.map((c) => (
-                <th
-                  key={c.field}
-                  className={c.num ? "num" : undefined}
-                  onClick={() => toggleSort(c.field)}
-                >
-                  {c.label}
-                  {arrow(c.field)}
-                </th>
-              ))}
+              {columns.map((c) => {
+                const collapsible = COLLAPSIBLE.has(c.field);
+                const isCollapsed = collapsible && collapsed.has(c.field);
+                const cls = [c.num ? "num" : "", isCollapsed ? "col-collapsed" : ""]
+                  .filter(Boolean)
+                  .join(" ");
+                return (
+                  <th key={c.field} className={cls || undefined}>
+                    {collapsible && (
+                      <button
+                        className="col-toggle"
+                        title={isCollapsed ? `Show ${c.label}` : `Hide ${c.label}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleCollapse(c.field);
+                        }}
+                      >
+                        <Square size={11} fill={isCollapsed ? "none" : "currentColor"} />
+                      </button>
+                    )}
+                    {!isCollapsed && (
+                      <span className="col-label" onClick={() => toggleSort(c.field)}>
+                        {c.label}
+                        {arrow(c.field)}
+                      </span>
+                    )}
+                  </th>
+                );
+              })}
               {curator && <th className="add-col" />}
             </tr>
           </thead>
@@ -202,11 +255,17 @@ export default function LibraryTable(props: Props) {
                         <cap.Icon size={15} />
                       </span>
                     </td>
-                    {columns.map((c) => (
-                      <td key={c.field} className={c.num ? "num" : undefined}>
-                        {c.cell(t)}
-                      </td>
-                    ))}
+                    {columns.map((c) => {
+                      const isCollapsed = COLLAPSIBLE.has(c.field) && collapsed.has(c.field);
+                      const cls = [c.num ? "num" : "", isCollapsed ? "col-collapsed" : ""]
+                        .filter(Boolean)
+                        .join(" ");
+                      return (
+                        <td key={c.field} className={cls || undefined}>
+                          {isCollapsed ? "" : c.cell(t)}
+                        </td>
+                      );
+                    })}
                     {curator && (
                     <td className="add-col">
                       <div className="row-actions">
