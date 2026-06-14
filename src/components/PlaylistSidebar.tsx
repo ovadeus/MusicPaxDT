@@ -8,6 +8,8 @@ interface Props {
   playlists: PlaylistInfo[];
   view: LibraryView;
   curator: boolean;
+  /// User-resizable width (px); see SidebarResizer.
+  width?: number;
   onSelect: (view: LibraryView) => void;
   onPlayPlaylist: (id: number, name: string) => void;
   onCreate: (name: string) => void;
@@ -21,6 +23,7 @@ export default function PlaylistSidebar({
   playlists,
   view,
   curator,
+  width,
   onSelect,
   onPlayPlaylist,
   onCreate,
@@ -37,7 +40,10 @@ export default function PlaylistSidebar({
   };
 
   return (
-    <aside className="playlist-sidebar">
+    <aside
+      className="playlist-sidebar"
+      style={width != null ? { width, flexShrink: 0 } : undefined}
+    >
       <button
         className={`sidebar-item${view.kind === "all" ? " active" : ""}`}
         onClick={() => onSelect({ kind: "all" })}

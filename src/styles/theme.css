@@ -860,6 +860,42 @@ button svg,
   gap: 2px;
 }
 
+/* Draggable seam + centered gripper between the sidebar and the table */
+.col-resizer {
+  flex: 0 0 auto;
+  width: 9px;
+  margin: 0 -4px; /* straddle the sidebar's border so the grip sits on the seam */
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: col-resize;
+}
+
+.col-resizer-grip {
+  width: 13px;
+  height: 38px;
+  border-radius: 7px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+  transition: border-color 0.12s, color 0.12s;
+}
+
+.col-resizer:hover .col-resizer-grip,
+body.col-resizing .col-resizer-grip {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+body.col-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
 .sidebar-item {
   display: flex;
   align-items: center;

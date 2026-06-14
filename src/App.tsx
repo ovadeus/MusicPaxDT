@@ -19,6 +19,7 @@ import NowPlayingBar from "./components/NowPlayingBar";
 import PlaylistSidebar, { type LibraryView } from "./components/PlaylistSidebar";
 import ReceiverPanel from "./components/ReceiverPanel";
 import SettingsPanel from "./components/SettingsPanel";
+import SidebarResizer from "./components/SidebarResizer";
 import SourceSelector, { type SelectableSource } from "./components/SourceSelector";
 import StreamPlayer from "./components/StreamPlayer";
 import * as ipc from "./lib/ipc";
@@ -60,6 +61,10 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [addUrlMode, setAddUrlMode] = useState<"youtube" | "spotify" | null>(null);
   const [ytSearchOpen, setYtSearchOpen] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    const saved = Number(localStorage.getItem("library.sidebarWidth"));
+    return saved >= 160 && saved <= 480 ? saved : 200;
+  });
   const [goLiveOpen, setGoLiveOpen] = useState(false);
   const [onAir, setOnAir] = useState(false);
   const [editTrack, setEditTrack] = useState<Track | null>(null);
@@ -602,6 +607,7 @@ export default function App() {
             playlists={playlists}
             view={view}
             curator={curator}
+            width={sidebarWidth}
             onSelect={setView}
             onPlayPlaylist={playPlaylist}
             onCreate={(name) => {
@@ -621,6 +627,13 @@ export default function App() {
                 })
                 .catch((e) => showStatus(`${e}`));
             }}
+          />
+          <SidebarResizer
+            width={sidebarWidth}
+            min={160}
+            max={480}
+            onChange={setSidebarWidth}
+            onCommit={(w) => localStorage.setItem("library.sidebarWidth", String(w))}
           />
           <LibraryTable
             tracks={tracks}
