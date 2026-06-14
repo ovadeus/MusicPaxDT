@@ -411,3 +411,9 @@ export function onPlaybackState(
 ): Promise<UnlistenFn> {
   return listen<{ state: PlaybackState }>("playback-state", (e) => cb(e.payload.state));
 }
+
+/// Fires when an OWNED track reaches its natural end (not a user stop), so the
+/// playlist can advance. See engine `ended_signal` → meters emitter.
+export function onTrackEnded(cb: () => void): Promise<UnlistenFn> {
+  return listen("track-ended", () => cb());
+}

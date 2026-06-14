@@ -74,6 +74,9 @@ pub struct Shared {
     pub decode_done: AtomicBool,
     /// Set by the callback when playback ran past the end of decoded audio.
     pub ended: AtomicBool,
+    /// Raised by poll_ended on a NATURAL end (not a user stop) so the UI emitter
+    /// can fire a `track-ended` event and the frontend can advance the playlist.
+    pub ended_signal: AtomicBool,
     pub peak_l_bits: AtomicU32,
     pub peak_r_bits: AtomicU32,
     pub rms_l_bits: AtomicU32,
@@ -106,6 +109,7 @@ impl Shared {
             duration_ms: AtomicU64::new(DURATION_UNKNOWN),
             decode_done: AtomicBool::new(false),
             ended: AtomicBool::new(false),
+            ended_signal: AtomicBool::new(false),
             peak_l_bits: AtomicU32::new(0),
             peak_r_bits: AtomicU32::new(0),
             rms_l_bits: AtomicU32::new(0),
@@ -669,6 +673,9 @@ impl AudioHost {
     /// Natural end of track: tear the session down and report stopped.
     fn poll_ended(&mut self) {
         if self.shared.ended.swap(false, Ordering::Acquire) {
+            // Natural end (not a user stop) — flag it for the UI emitter, which
+            // turns it into a `track-ended` event so the playlist advances.
+            self.shared.ended_signal.store(true, Ordering::Relaxed);
             self.teardown();
         }
     }

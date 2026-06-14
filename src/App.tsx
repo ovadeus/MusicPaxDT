@@ -307,22 +307,21 @@ export default function App() {
     [playTrack, showStatus],
   );
 
-  // Natural end of an OWNED track → advance.
-  const prevPlayState = useRef<PlaybackState>("stopped");
+  // Natural end of an OWNED track → advance. Driven by an explicit engine
+  // event (not a position heuristic), so it fires reliably regardless of
+  // duration metadata or the position reset that teardown performs.
   useEffect(() => {
-    const was = prevPlayState.current;
-    prevPlayState.current = playState;
-    const { id, positionMs: pos, durationMs } = nowRef.current;
-    if (
-      was === "playing" &&
-      playState === "stopped" &&
-      id != null &&
-      durationMs > 0 &&
-      pos >= durationMs - 2500
-    ) {
-      playNext(id);
-    }
-  }, [playState, playNext]);
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    ipc.onTrackEnded(() => playNext(nowRef.current.id)).then((fn) => {
+      if (disposed) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [playNext]);
 
   // ----- handlers -----------------------------------------------------------
 

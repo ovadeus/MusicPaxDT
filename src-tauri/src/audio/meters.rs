@@ -81,6 +81,11 @@ pub fn spawn_emitter(app: AppHandle, shared: Arc<Shared>) {
                     );
                 }
 
+                // A track that ended on its own → tell the UI to advance.
+                if shared.ended_signal.swap(false, Ordering::Relaxed) {
+                    let _ = app.emit("track-ended", ());
+                }
+
                 if state_changed || tick.is_multiple_of(6) {
                     let position_ms = shared.position_ms();
                     if position_ms != last_position {
