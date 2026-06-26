@@ -63,6 +63,13 @@ fn migrate(conn: &Connection) -> AppResult<()> {
         conn.execute_batch(MIGRATION_0001)?;
         conn.pragma_update(None, "user_version", 1)?;
     }
+    if version < 2 {
+        // Media type tag: Music / Podcast / Audiobook / Movie / Radio / Tutorial.
+        conn.execute_batch(
+            "ALTER TABLE tracks ADD COLUMN media_type TEXT NOT NULL DEFAULT 'music';",
+        )?;
+        conn.pragma_update(None, "user_version", 2)?;
+    }
     Ok(())
 }
 
@@ -82,6 +89,9 @@ fn track_from_row(row: &Row) -> rusqlite::Result<Track> {
         uri: row.get("uri")?,
         source_kind: row.get("source_kind")?,
         capability,
+        media_type: row
+            .get::<_, String>("media_type")
+            .unwrap_or_else(|_| "music".to_string()),
         fingerprint: row.get("fingerprint")?,
         musicbrainz_id: row.get("musicbrainz_id")?,
         art_path: row.get("art_path")?,
@@ -128,20 +138,29 @@ pub struct TrackEdit {
     pub album: Option<String>,
     pub year: Option<i64>,
     pub genre: Option<String>,
+    /// media_type override; None leaves the current value untouched (NOT NULL).
+    pub media_type: Option<String>,
 }
 
 pub fn update_track_metadata(conn: &Connection, id: i64, edit: &TrackEdit) -> AppResult<Track> {
     let blank_to_null = |s: &Option<String>| -> Option<String> {
         s.as_ref().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
     };
+    let media_type = edit
+        .media_type
+        .as_ref()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
     let changed = conn.execute(
-        "UPDATE tracks SET title = ?1, artist = ?2, album = ?3, year = ?4, genre = ?5 WHERE id = ?6",
+        "UPDATE tracks SET title = ?1, artist = ?2, album = ?3, year = ?4, genre = ?5,
+            media_type = COALESCE(?6, media_type) WHERE id = ?7",
         params![
             blank_to_null(&edit.title),
             blank_to_null(&edit.artist),
             blank_to_null(&edit.album),
             edit.year,
             blank_to_null(&edit.genre),
+            media_type,
             id
         ],
     )?;
@@ -195,32 +214,53 @@ pub fn list_tracks(
     conn: &Connection,
     query: Option<&str>,
     sort: Option<&str>,
+    media_type: Option<&str>,
     limit: i64,
     offset: i64,
 ) -> AppResult<Vec<Track>> {
     let order = order_by(sort);
-    let trimmed = query.map(str::trim).filter(|q| !q.is_empty());
+    let q = query.map(str::trim).filter(|q| !q.is_empty());
+    let m = media_type
+        .map(str::trim)
+        .filter(|m| !m.is_empty() && !m.eq_ignore_ascii_case("all"));
     let mut tracks = Vec::new();
-    match trimmed {
-        Some(q) => {
+    let mut collect = |stmt: &mut rusqlite::Statement, p: &[&dyn rusqlite::ToSql]| -> AppResult<()> {
+        let rows = stmt.query_map(p, track_from_row)?;
+        for row in rows {
+            tracks.push(row?);
+        }
+        Ok(())
+    };
+    match (q, m) {
+        (Some(q), Some(m)) => {
+            let sql = format!(
+                "SELECT * FROM tracks
+                 WHERE id IN (SELECT rowid FROM tracks_fts WHERE tracks_fts MATCH ?1)
+                   AND media_type = ?2 ORDER BY {order} LIMIT ?3 OFFSET ?4"
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            collect(&mut stmt, params![fts_expr(q), m, limit, offset])?;
+        }
+        (Some(q), None) => {
             let sql = format!(
                 "SELECT * FROM tracks
                  WHERE id IN (SELECT rowid FROM tracks_fts WHERE tracks_fts MATCH ?1)
                  ORDER BY {order} LIMIT ?2 OFFSET ?3"
             );
             let mut stmt = conn.prepare(&sql)?;
-            let rows = stmt.query_map(params![fts_expr(q), limit, offset], track_from_row)?;
-            for row in rows {
-                tracks.push(row?);
-            }
+            collect(&mut stmt, params![fts_expr(q), limit, offset])?;
         }
-        None => {
+        (None, Some(m)) => {
+            let sql = format!(
+                "SELECT * FROM tracks WHERE media_type = ?1 ORDER BY {order} LIMIT ?2 OFFSET ?3"
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            collect(&mut stmt, params![m, limit, offset])?;
+        }
+        (None, None) => {
             let sql = format!("SELECT * FROM tracks ORDER BY {order} LIMIT ?1 OFFSET ?2");
             let mut stmt = conn.prepare(&sql)?;
-            let rows = stmt.query_map(params![limit, offset], track_from_row)?;
-            for row in rows {
-                tracks.push(row?);
-            }
+            collect(&mut stmt, params![limit, offset])?;
         }
     }
     Ok(tracks)
@@ -361,6 +401,14 @@ pub fn delete_playlist(conn: &Connection, playlist_id: i64) -> AppResult<()> {
     Ok(())
 }
 
+pub fn rename_playlist(conn: &Connection, playlist_id: i64, name: &str) -> AppResult<()> {
+    conn.execute(
+        "UPDATE playlists SET name = ?2 WHERE id = ?1",
+        params![playlist_id, name.trim()],
+    )?;
+    Ok(())
+}
+
 /// Record a successful load: bump play_count and append to history.
 pub fn record_play(conn: &Connection, track_id: i64, played_at: i64) -> AppResult<()> {
     conn.execute(
@@ -404,7 +452,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 1);
+        assert_eq!(version, 2);
         // FTS5 table exists and is queryable
         let count: i64 = conn
             .query_row("SELECT count(*) FROM tracks_fts", [], |r| r.get(0))
@@ -418,7 +466,7 @@ mod tests {
         let t = new_track("Stairway to Heaven", "Led Zeppelin", "/music/stairway.flac");
         assert!(insert_track(&conn, &t, 1).unwrap());
         assert!(!insert_track(&conn, &t, 2).unwrap(), "same uri must be skipped");
-        let all = list_tracks(&conn, None, None, 100, 0).unwrap();
+        let all = list_tracks(&conn, None, None, None, 100, 0).unwrap();
         assert_eq!(all.len(), 1);
     }
 
@@ -434,14 +482,14 @@ mod tests {
         insert_track(&conn, &new_track("Kashmir", "Led Zeppelin", "/m/b.flac"), 1).unwrap();
         insert_track(&conn, &new_track("Hey Jude", "The Beatles", "/m/c.mp3"), 1).unwrap();
 
-        let zep = list_tracks(&conn, Some("zeppelin"), None, 100, 0).unwrap();
+        let zep = list_tracks(&conn, Some("zeppelin"), None, None, 100, 0).unwrap();
         assert_eq!(zep.len(), 2);
         // prefix search
-        let stair = list_tracks(&conn, Some("stair"), None, 100, 0).unwrap();
+        let stair = list_tracks(&conn, Some("stair"), None, None, 100, 0).unwrap();
         assert_eq!(stair.len(), 1);
         assert_eq!(stair[0].title.as_deref(), Some("Stairway to Heaven"));
         // FTS metacharacters must not inject syntax errors
-        let weird = list_tracks(&conn, Some("\"AND( near:*"), None, 100, 0);
+        let weird = list_tracks(&conn, Some("\"AND( near:*"), None, None, 100, 0);
         assert!(weird.is_ok());
     }
 
@@ -450,10 +498,10 @@ mod tests {
         let conn = mem_db();
         insert_track(&conn, &new_track("B side", "X", "/m/1.mp3"), 1).unwrap();
         insert_track(&conn, &new_track("A side", "X", "/m/2.mp3"), 2).unwrap();
-        let sorted = list_tracks(&conn, None, Some("title:asc"), 100, 0).unwrap();
+        let sorted = list_tracks(&conn, None, Some("title:asc"), None, 100, 0).unwrap();
         assert_eq!(sorted[0].title.as_deref(), Some("A side"));
         // unknown field falls back instead of injecting SQL
-        let fallback = list_tracks(&conn, None, Some("evil; DROP TABLE tracks:asc"), 100, 0);
+        let fallback = list_tracks(&conn, None, Some("evil; DROP TABLE tracks:asc"), None, 100, 0);
         assert!(fallback.is_ok());
     }
 
@@ -467,7 +515,7 @@ mod tests {
         insert_track(&conn, &stream, 2).unwrap();
 
         let pid = create_playlist(&conn, "Mixed").unwrap();
-        let all = list_tracks(&conn, None, Some("added_at:asc"), 10, 0).unwrap();
+        let all = list_tracks(&conn, None, Some("added_at:asc"), None, 10, 0).unwrap();
         add_to_playlist(&conn, pid, all[0].id).unwrap();
         add_to_playlist(&conn, pid, all[1].id).unwrap();
 
@@ -483,7 +531,7 @@ mod tests {
         delete_playlist(&conn, pid).unwrap();
         assert!(list_playlists(&conn).unwrap().is_empty());
         // tracks survive playlist deletion
-        assert_eq!(list_tracks(&conn, None, None, 10, 0).unwrap().len(), 2);
+        assert_eq!(list_tracks(&conn, None, None, None, 10, 0).unwrap().len(), 2);
     }
 
     #[test]
@@ -495,7 +543,7 @@ mod tests {
             1,
         )
         .unwrap();
-        let id = list_tracks(&conn, None, None, 10, 0).unwrap()[0].id;
+        let id = list_tracks(&conn, None, None, None, 10, 0).unwrap()[0].id;
 
         let edit = TrackEdit {
             title: Some("Smooth Operator".into()),
@@ -503,6 +551,7 @@ mod tests {
             album: Some("Diamond Life".into()),
             year: Some(1984),
             genre: Some("  ".into()), // whitespace → NULL
+            media_type: None,
         };
         let updated = update_track_metadata(&conn, id, &edit).unwrap();
         assert_eq!(updated.title.as_deref(), Some("Smooth Operator"));
@@ -512,9 +561,9 @@ mod tests {
         assert_eq!(updated.genre, None, "blank genre stored as NULL");
 
         // FTS reflects the new title, not the old one.
-        let hit = list_tracks(&conn, Some("smooth operator"), None, 10, 0).unwrap();
+        let hit = list_tracks(&conn, Some("smooth operator"), None, None, 10, 0).unwrap();
         assert_eq!(hit.len(), 1);
-        let stale = list_tracks(&conn, Some("greatest"), None, 10, 0).unwrap();
+        let stale = list_tracks(&conn, Some("greatest"), None, None, 10, 0).unwrap();
         assert!(stale.is_empty(), "old title must leave the FTS index");
 
         // Unknown id is an error.
@@ -525,15 +574,15 @@ mod tests {
     fn delete_track_removes_row_playlist_links_and_fts() {
         let conn = mem_db();
         insert_track(&conn, &new_track("Kashmir", "Led Zeppelin", "/m/k.flac"), 1).unwrap();
-        let id = list_tracks(&conn, None, None, 10, 0).unwrap()[0].id;
+        let id = list_tracks(&conn, None, None, None, 10, 0).unwrap()[0].id;
         let pid = create_playlist(&conn, "P").unwrap();
         add_to_playlist(&conn, pid, id).unwrap();
 
         delete_track(&conn, id).unwrap();
-        assert!(list_tracks(&conn, None, None, 10, 0).unwrap().is_empty());
+        assert!(list_tracks(&conn, None, None, None, 10, 0).unwrap().is_empty());
         assert!(playlist_tracks(&conn, pid).unwrap().is_empty(), "playlist link removed");
         assert!(
-            list_tracks(&conn, Some("kashmir"), None, 10, 0).unwrap().is_empty(),
+            list_tracks(&conn, Some("kashmir"), None, None, 10, 0).unwrap().is_empty(),
             "FTS entry removed"
         );
         assert!(delete_track(&conn, id).is_err(), "second delete is an error");
@@ -545,7 +594,7 @@ mod tests {
         let mut t = new_track("Radio Stream", "Station", "radio://example");
         t.capability = Capability::StreamPlayable;
         insert_track(&conn, &t, 1).unwrap();
-        let all = list_tracks(&conn, None, None, 10, 0).unwrap();
+        let all = list_tracks(&conn, None, None, None, 10, 0).unwrap();
         assert_eq!(all[0].capability, Capability::StreamPlayable);
     }
 }

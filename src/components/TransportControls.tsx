@@ -1,4 +1,4 @@
-import { Pause, Play, Square } from "lucide-react";
+import { Pause, Play, SkipBack, SkipForward, Square } from "lucide-react";
 import type { PlaybackState } from "../lib/types";
 
 interface Props {
@@ -7,12 +7,32 @@ interface Props {
   onPlay: () => void;
   onPause: () => void;
   onStop: () => void;
+  onPrev?: () => void;
+  onNext?: () => void;
+  canStep?: boolean;
 }
 
-export default function TransportControls({ state, canPlay, onPlay, onPause, onStop }: Props) {
+export default function TransportControls({
+  state,
+  canPlay,
+  onPlay,
+  onPause,
+  onStop,
+  onPrev,
+  onNext,
+  canStep = false,
+}: Props) {
   const playing = state === "playing";
   return (
     <div className="transport">
+      <button
+        className="transport-button"
+        disabled={!canStep}
+        onClick={onPrev}
+        title="Previous track"
+      >
+        <SkipBack size={14} fill="currentColor" />
+      </button>
       <button
         className="transport-button primary"
         disabled={!canPlay}
@@ -32,6 +52,14 @@ export default function TransportControls({ state, canPlay, onPlay, onPause, onS
         title="Stop"
       >
         <Square size={12} fill="currentColor" />
+      </button>
+      <button
+        className="transport-button"
+        disabled={!canStep}
+        onClick={onNext}
+        title="Next track"
+      >
+        <SkipForward size={14} fill="currentColor" />
       </button>
     </div>
   );

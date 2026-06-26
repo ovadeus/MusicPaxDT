@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { ChevronLeft, Settings as SettingsIcon } from "lucide-react";
+import { ChevronLeft, Minimize2, Settings as SettingsIcon } from "lucide-react";
+import MpxLogo from "./components/MpxLogo";
 import ManageMusicMenu from "./components/ManageMusicMenu";
 import GoLivePanel from "./components/GoLivePanel";
 import AddUrlModal from "./components/AddUrlModal";
@@ -28,6 +29,7 @@ import type {
   EngineStatus,
   EnrichProposal,
   LineInSource,
+  MediaType,
   NowPlaying,
   PlaybackState,
   PlaylistInfo,
@@ -38,12 +40,47 @@ import type {
 } from "./lib/types";
 import "./styles/theme.css";
 
+const VIDEO_URI_EXTS = ["mp4", "m4v", "webm", "mov", "mkv", "avi", "ogv"];
+
+/// A direct-stream URL that points at a video file (vs. audio).
+function isVideoUri(uri: string): boolean {
+  const path = uri.split(/[?#]/)[0].toLowerCase();
+  const ext = path.split(".").pop() ?? "";
+  return VIDEO_URI_EXTS.includes(ext);
+}
+
+/// Sort tracks client-side for a chosen column. Used for playlist views, whose
+/// rows arrive in curated position order (the server only sorts the library
+/// query). `added_at` means "leave in position order". String compares are
+/// numeric-aware so "Track 2" precedes "Track 10".
+function sortTracks(list: Track[], sort: SortSpec): Track[] {
+  if (sort.field === "added_at") return list;
+  const dir = sort.dir === "asc" ? 1 : -1;
+  const num = (t: Track): number | null =>
+    sort.field === "year" ? t.year : sort.field === "duration_ms" ? t.durationMs : null;
+  const str = (t: Track): string =>
+    sort.field === "artist"
+      ? (t.artist ?? "")
+      : sort.field === "album"
+        ? (t.album ?? "")
+        : sort.field === "genre"
+          ? (t.genre ?? "")
+          : (t.title ?? "");
+  return [...list].sort((a, b) => {
+    const an = num(a);
+    const bn = num(b);
+    if (an != null || bn != null) return ((an ?? 0) - (bn ?? 0)) * dir;
+    return str(a).localeCompare(str(b), undefined, { numeric: true, sensitivity: "base" }) * dir;
+  });
+}
+
 export default function App() {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [view, setView] = useState<LibraryView>({ kind: "all" });
   const [playlists, setPlaylists] = useState<PlaylistInfo[]>([]);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortSpec>({ field: "added_at", dir: "desc" });
+  const [mediaTypeFilter, setMediaTypeFilter] = useState<MediaType | null>(null);
   const [devices, setDevices] = useState<AudioDevice[]>([]);
   const [deviceId, setDeviceId] = useState("default");
   const [now, setNow] = useState<NowPlaying | null>(null);
@@ -66,6 +103,12 @@ export default function App() {
     return saved >= 160 && saved <= 480 ? saved : 200;
   });
   const [goLiveOpen, setGoLiveOpen] = useState(false);
+  // Theater (in-app fullscreen) for the now-playing media.
+  const [theater, setTheater] = useState(false);
+  const [theaterRect, setTheaterRect] = useState<
+    { top: number; left: number; width: number; height: number } | null
+  >(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
   const [onAir, setOnAir] = useState(false);
   const [editTrack, setEditTrack] = useState<Track | null>(null);
   const [enrichingId, setEnrichingId] = useState<number | null>(null);
@@ -117,19 +160,25 @@ export default function App() {
 
   const refreshTracks = useCallback(async () => {
     try {
+      const mediaType = mediaTypeFilter;
       if (source === "stream") {
         // The Stream view is the library, filtered to direct-stream tracks.
-        const all = await ipc.listTracks({ query, sort });
+        const all = await ipc.listTracks({ query, sort, mediaType });
         setTracks(all.filter((t) => t.sourceKind === "stream"));
       } else if (view.kind === "playlist") {
-        setTracks(await ipc.playlistTracks(view.id));
+        // Playlist rows come in curated position order; apply the active column
+        // sort client-side (server sort only covers the library query). The type
+        // filter is also applied client-side for playlists.
+        let ts = sortTracks(await ipc.playlistTracks(view.id), sort);
+        if (mediaType) ts = ts.filter((t) => t.mediaType === mediaType);
+        setTracks(ts);
       } else {
-        setTracks(await ipc.listTracks({ query, sort }));
+        setTracks(await ipc.listTracks({ query, sort, mediaType }));
       }
     } catch (e) {
       showStatus(`Failed to load library: ${e}`);
     }
-  }, [view, query, sort, showStatus, source]);
+  }, [view, query, sort, showStatus, source, mediaTypeFilter]);
 
   // Debounced refresh on view/search/sort change.
   const debounce = useRef<number | undefined>(undefined);
@@ -289,6 +338,33 @@ export default function App() {
     [playTrack],
   );
 
+  // Manual "previous track" — step back one in the current list.
+  const playPrev = useCallback(
+    (beforeTrackId: number | null) => {
+      const list = tracksRef.current;
+      if (!list.length || beforeTrackId == null) return;
+      const idx = list.findIndex((t) => t.id === beforeTrackId);
+      if (idx > 0) void playTrack(list[idx - 1]);
+    },
+    [playTrack],
+  );
+
+  // Single entry point for "this track ended → advance", debounced because a
+  // lane can emit the end more than once (YouTube reports playerState 0
+  // repeatedly near the end, and may also fire onStateChange). Collapsing them
+  // keeps us from skipping a track.
+  const lastEndAdvance = useRef(0);
+  const advanceFromEnd = useCallback(
+    (endedId: number | null) => {
+      if (endedId == null) return;
+      const now = performance.now();
+      if (now - lastEndAdvance.current < 2000) return;
+      lastEndAdvance.current = now;
+      playNext(endedId);
+    },
+    [playNext],
+  );
+
   // Double-click a playlist → play it from the first track.
   const playPlaylist = useCallback(
     async (id: number, name: string) => {
@@ -313,7 +389,7 @@ export default function App() {
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let disposed = false;
-    ipc.onTrackEnded(() => playNext(nowRef.current.id)).then((fn) => {
+    ipc.onTrackEnded(() => advanceFromEnd(nowRef.current.id)).then((fn) => {
       if (disposed) fn();
       else unlisten = fn;
     });
@@ -321,7 +397,7 @@ export default function App() {
       disposed = true;
       unlisten?.();
     };
-  }, [playNext]);
+  }, [advanceFromEnd]);
 
   // ----- handlers -----------------------------------------------------------
 
@@ -365,6 +441,7 @@ export default function App() {
       uri: s.url,
       sourceKind: "radio",
       capability: "STREAM_PLAYABLE",
+      mediaType: "radio",
       fingerprint: null,
       musicbrainzId: null,
       artPath: null,
@@ -446,6 +523,51 @@ export default function App() {
   // The track the Now Playing panel describes: a live stream, else the
   // engine's loaded track.
   const detailTrack = stream ?? now?.track ?? null;
+
+  // Theater: when a live video is playing, the floating player fills the stage;
+  // otherwise the stage shows the cover.
+  const theaterVideo =
+    stream != null &&
+    (stream.sourceKind === "youtube" ||
+      (stream.sourceKind === "stream" && isVideoUri(stream.uri)));
+  const theaterCover = (() => {
+    const t = detailTrack;
+    if (!t) return null;
+    if (t.artPath && /^(https?:|data:)/.test(t.artPath)) return t.artPath;
+    const m = t.uri.match(/[?&]v=([A-Za-z0-9_-]{11})/);
+    return m ? `https://i.ytimg.com/vi/${m[1]}/hqdefault.jpg` : null;
+  })();
+
+  // Keep the floating video players matched to the theater stage's box (no
+  // remount → uninterrupted playback). Re-measure on resize/layout changes.
+  useEffect(() => {
+    if (!theater) {
+      setTheaterRect(null);
+      return;
+    }
+    const measure = () => {
+      const el = stageRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      setTheaterRect({ top: r.top, left: r.left, width: r.width, height: r.height });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    if (stageRef.current) ro.observe(stageRef.current);
+    window.addEventListener("resize", measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [theater, showNowPlaying]);
+
+  // Esc exits theater.
+  useEffect(() => {
+    if (!theater) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setTheater(false);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [theater]);
 
   const handleStop = async () => {
     setStream(null);
@@ -583,6 +705,8 @@ export default function App() {
                   })
                   .catch((e) => showStatus(`${e}`));
               }}
+              mediaType={mediaTypeFilter}
+              onMediaType={setMediaTypeFilter}
             />
           </div>
         </div>
@@ -637,6 +761,21 @@ export default function App() {
           <LibraryTable
             tracks={tracks}
             heading={view.kind === "playlist" ? view.name : undefined}
+            onRenameHeading={
+              view.kind === "playlist"
+                ? (name) => {
+                    const id = view.id;
+                    ipc
+                      .renamePlaylist(id, name)
+                      .then(() => {
+                        setView({ kind: "playlist", id, name });
+                        refreshPlaylists();
+                        showStatus(`Renamed playlist to “${name}”`);
+                      })
+                      .catch((e) => showStatus(`${e}`));
+                  }
+                : undefined
+            }
             searchable={view.kind === "all"}
             query={query}
             onQueryChange={setQuery}
@@ -663,6 +802,8 @@ export default function App() {
                 })
                 .catch((e) => showStatus(`${e}`));
             }}
+            mediaType={mediaTypeFilter}
+            onMediaType={setMediaTypeFilter}
           />
         </div>
       )}
@@ -674,6 +815,7 @@ export default function App() {
           curator={curator}
           onCollapse={() => toggleNowPlaying(false)}
           onError={showStatus}
+          onExpand={() => setTheater(true)}
         />
       ) : (
         <button
@@ -683,6 +825,17 @@ export default function App() {
         >
           <ChevronLeft size={16} />
         </button>
+      )}
+
+      {theater && (
+        <div className="theater-stage" ref={stageRef}>
+          {!theaterVideo &&
+            (theaterCover ? (
+              <img className="theater-cover" src={theaterCover} alt="" />
+            ) : (
+              <MpxLogo className="theater-logo" />
+            ))}
+        </div>
       )}
       </div>
 
@@ -710,9 +863,10 @@ export default function App() {
             setStreamPos(pos);
             if (dur > 0) setStreamDur(dur);
           }}
-          onEnded={() => playNext(stream.id)}
+          onEnded={() => advanceFromEnd(stream.id)}
           onClose={() => setStream(null)}
           onError={showStatus}
+          theaterRect={theater && theaterVideo ? theaterRect : null}
         />
       )}
 
@@ -728,9 +882,21 @@ export default function App() {
             setStreamPos(pos);
             if (dur > 0) setStreamDur(dur);
           }}
-          onEnded={() => playNext(stream.id)}
+          onEnded={() => advanceFromEnd(stream.id)}
           onClose={() => setStream(null)}
+          theaterRect={theater && theaterVideo ? theaterRect : null}
         />
+      )}
+
+      {theater && theaterRect && (
+        <button
+          className="theater-close"
+          title="Exit full screen (Esc)"
+          style={{ top: theaterRect.top + 12, left: theaterRect.left + theaterRect.width - 46 }}
+          onClick={() => setTheater(false)}
+        >
+          <Minimize2 size={16} />
+        </button>
       )}
 
       <NowPlayingBar
@@ -758,6 +924,9 @@ export default function App() {
           stream ? setStreamSeek(ms) : ipc.seek(ms).catch((e) => showStatus(`${e}`))
         }
         onVolume={handleVolume}
+        onPrev={() => playPrev(nowRef.current.id)}
+        onNext={() => playNext(nowRef.current.id)}
+        canStep={!lineIn && (stream != null || now != null)}
         vuSynthetic={stream != null}
       />
 
@@ -826,6 +995,7 @@ export default function App() {
           track={editTrack}
           onClose={() => setEditTrack(null)}
           onError={showStatus}
+          onInfo={showStatus}
           onSaved={(updated) => {
             showStatus(`Updated “${updated.title ?? "track"}”`);
             refreshTracks();

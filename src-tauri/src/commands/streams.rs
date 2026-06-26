@@ -623,6 +623,25 @@ pub async fn delete_playlist(playlist_id: i64, state: State<'_, AppState>) -> Ap
     .map_err(|e| AppError::Other(format!("playlist task failed: {e}")))?
 }
 
+#[tauri::command]
+pub async fn rename_playlist(
+    playlist_id: i64,
+    name: String,
+    state: State<'_, AppState>,
+) -> AppResult<()> {
+    let trimmed = name.trim().to_string();
+    if trimmed.is_empty() {
+        return Err(AppError::Other("Playlist name can't be empty".into()));
+    }
+    let db_arc = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = lock_unpoisoned(&db_arc);
+        db::rename_playlist(&conn, playlist_id, &trimmed)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("playlist task failed: {e}")))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

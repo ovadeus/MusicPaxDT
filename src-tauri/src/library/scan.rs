@@ -221,7 +221,7 @@ mod tests {
         assert_eq!(again.imported, 0);
         assert_eq!(again.skipped, 2, "rescan must dedupe by uri");
 
-        let tracks = crate::library::db::list_tracks(&conn, None, None, 10, 0).unwrap();
+        let tracks = crate::library::db::list_tracks(&conn, None, None, None, 10, 0).unwrap();
         assert_eq!(tracks.len(), 2);
         let tagged = tracks
             .iter()

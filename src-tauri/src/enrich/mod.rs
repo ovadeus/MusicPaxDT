@@ -127,11 +127,13 @@ pub async fn enrich_track(
     Ok(EnrichOutcome::default())
 }
 
-/// "Clean Track Data": dissect a messy label into proper fields WITHOUT a
-/// MusicBrainz round-trip (these are often non-catalog YouTube uploads). The
-/// free offline heuristic runs first; the LLM refines the hard cases when
-/// configured and permitted. Only fields that differ from the track's current
-/// values are surfaced, so the review dialog shows real changes.
+/// "Clean Track Data": dissect a messy label into proper fields. The free
+/// offline heuristic runs first; the LLM refines the hard cases when configured
+/// and permitted; then a FREE MusicBrainz lookup fills the authoritative
+/// artist / album / year / cover art (the heuristic can split "Artist - Title"
+/// but can't know an album, and YouTube uploads usually have a junk uploader in
+/// the artist field). Only fields that differ from the track's current values
+/// are surfaced, so the review dialog shows real changes.
 pub async fn clean_metadata(
     track: &Track,
     cfg: &EnrichConfig,
@@ -172,6 +174,41 @@ pub async fn clean_metadata(
         }
     }
 
+    // Free MusicBrainz fill (no key): authoritative artist / album / year /
+    // cover art. Search with the parsed artist when we have one; if that finds
+    // nothing (e.g. the field is a junk uploader name), fall back to a
+    // title-only search so distinctive songs still resolve.
+    let mut art_url: Option<String> = None;
+    let mut musicbrainz_id: Option<String> = None;
+    let mut used_mb = false;
+    let search_title = parsed
+        .title
+        .clone()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| raw_title.clone());
+    if !search_title.is_empty() {
+        let hint = parsed.artist.clone().unwrap_or_default();
+        let mut mb = musicbrainz::lookup(&hint, &search_title).await.ok().flatten();
+        if mb.is_none() && !hint.trim().is_empty() {
+            mb = musicbrainz::lookup("", &search_title).await.ok().flatten();
+        }
+        if let Some(m) = mb.filter(|m| m.confidence >= 0.7) {
+            used_mb = true;
+            if let Some(a) = m.artist {
+                parsed.artist = Some(a); // canonical name, overrides junk uploaders
+            }
+            if album.is_none() {
+                album = m.album;
+            }
+            if let Some(y) = m.year {
+                parsed.year = Some(y); // original album year beats a remaster year
+            }
+            art_url = m.art_url;
+            musicbrainz_id = m.musicbrainz_id;
+        }
+    }
+
     // Surface only fields that actually change something.
     let title = parsed.title.filter(|v| Some(v.as_str()) != track.title.as_deref());
     let artist = parsed.artist.filter(|v| Some(v.as_str()) != track.artist.as_deref());
@@ -179,12 +216,26 @@ pub async fn clean_metadata(
     let album = album.filter(|v| Some(v.as_str()) != track.album.as_deref());
     let genre = genre.filter(|v| Some(v.as_str()) != track.genre.as_deref());
 
-    if title.is_none() && artist.is_none() && year.is_none() && album.is_none() && genre.is_none() {
+    if title.is_none()
+        && artist.is_none()
+        && year.is_none()
+        && album.is_none()
+        && genre.is_none()
+        && art_url.is_none()
+    {
         return Ok(EnrichOutcome {
             suggestion: None,
             used_llm,
         });
     }
+
+    let (source, confidence) = if used_mb {
+        ("clean+musicbrainz", 0.9f32)
+    } else if used_llm {
+        ("clean+llm", 0.8f32)
+    } else {
+        ("clean", 0.65f32)
+    };
 
     Ok(EnrichOutcome {
         suggestion: Some(MetadataSuggestion {
@@ -193,9 +244,10 @@ pub async fn clean_metadata(
             album,
             year,
             genre,
-            source: if used_llm { "clean+llm".into() } else { "clean".into() },
-            confidence: if used_llm { 0.8 } else { 0.65 },
-            ..Default::default()
+            art_url,
+            musicbrainz_id,
+            source: source.into(),
+            confidence,
         }),
         used_llm,
     })
@@ -238,6 +290,7 @@ mod tests {
             uri: "/music/x.flac".into(),
             source_kind: "local".into(),
             capability: Capability::Owned,
+            media_type: "music".into(),
             fingerprint: None,
             musicbrainz_id: None,
             art_path: None,

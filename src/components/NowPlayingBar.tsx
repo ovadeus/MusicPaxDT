@@ -16,6 +16,10 @@ interface Props {
   onStop: () => void;
   onSeek: (ms: number) => void;
   onVolume: (level: number) => void;
+  onPrev?: () => void;
+  onNext?: () => void;
+  /// Whether prev/next can step through the current list.
+  canStep?: boolean;
   /// VU meter is synthesized for sandboxed stream lanes (YouTube/radio).
   vuSynthetic?: boolean;
 }
@@ -32,6 +36,9 @@ export default function NowPlayingBar(props: Props) {
     onStop,
     onSeek,
     onVolume,
+    onPrev,
+    onNext,
+    canStep = false,
     vuSynthetic = false,
   } = props;
   const durationMs = track?.durationMs ?? 0;
@@ -77,6 +84,9 @@ export default function NowPlayingBar(props: Props) {
         onPlay={onPlay}
         onPause={onPause}
         onStop={onStop}
+        onPrev={onPrev}
+        onNext={onNext}
+        canStep={canStep}
       />
 
       <div className="np-seek">

@@ -13,6 +13,7 @@ import type {
   ImportResult,
   IntegrationStatus,
   LineInSource,
+  MetadataSuggestion,
   MirrorProgress,
   MirrorReport,
   NowPlaying,
@@ -34,12 +35,14 @@ export function listTracks(opts: {
   sort?: SortSpec;
   limit?: number;
   offset?: number;
+  mediaType?: string | null;
 }): Promise<Track[]> {
   return invoke<Track[]>("list_tracks", {
     query: opts.query || null,
     sort: opts.sort ? `${opts.sort.field}:${opts.sort.dir}` : null,
     limit: opts.limit ?? null,
     offset: opts.offset ?? null,
+    mediaType: opts.mediaType ?? null,
   });
 }
 
@@ -51,6 +54,7 @@ export function updateTrackMetadata(
     album: string | null;
     year: number | null;
     genre: string | null;
+    mediaType?: string | null;
   },
 ): Promise<Track> {
   return invoke<Track>("update_track_metadata", { trackId, ...fields });
@@ -148,6 +152,10 @@ export function setTone(bassDb: number, trebleDb: number): Promise<EngineStatus>
   return invoke<EngineStatus>("set_tone", { bassDb, trebleDb });
 }
 
+export function setInputGain(db: number): Promise<EngineStatus> {
+  return invoke<EngineStatus>("set_input_gain", { db });
+}
+
 export function engineStatus(): Promise<EngineStatus> {
   return invoke<EngineStatus>("engine_status");
 }
@@ -198,6 +206,20 @@ export function proposeEnrichment(
   return invoke<EnrichProposeReport>("propose_enrichment", { trackIds });
 }
 
+/// Look up tags for one track using the (possibly edited) title/artist shown in
+/// the edit modal. Returns a single suggestion, or null when nothing matched.
+export function lookupTrackTags(
+  trackId: number,
+  title: string,
+  artist: string,
+): Promise<MetadataSuggestion | null> {
+  return invoke<MetadataSuggestion | null>("lookup_track_tags", {
+    trackId,
+    title,
+    artist,
+  });
+}
+
 export function applyEnrichment(edits: ApprovedEdit[]): Promise<number> {
   return invoke<number>("apply_enrichment", { edits });
 }
@@ -219,6 +241,19 @@ export function onEnrichProgress(
   cb: (p: EnrichProgress) => void,
 ): Promise<UnlistenFn> {
   return listen<EnrichProgress>("enrich-progress", (e) => cb(e.payload));
+}
+
+export interface ApplyProgress {
+  done: number;
+  total: number;
+}
+
+/// Progress while approved enrichment edits are being written (cover-art
+/// downloads make a big batch slow).
+export function onApplyProgress(
+  cb: (p: ApplyProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<ApplyProgress>("enrich-apply-progress", (e) => cb(e.payload));
 }
 
 // --- streams, mirror, playlists -------------------------------------------
@@ -279,6 +314,10 @@ export function addToPlaylist(playlistId: number, trackId: number): Promise<void
 
 export function deletePlaylist(playlistId: number): Promise<void> {
   return invoke<void>("delete_playlist", { playlistId });
+}
+
+export function renamePlaylist(playlistId: number, name: string): Promise<void> {
+  return invoke<void>("rename_playlist", { playlistId, name });
 }
 
 export interface MpxImportReport {

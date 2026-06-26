@@ -147,6 +147,14 @@ struct EnrichProgress {
     capped: bool,
 }
 
+/// Progress while applying approved edits (cover-art downloads make it slow).
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ApplyProgress {
+    done: usize,
+    total: usize,
+}
+
 /// One track's proposal: the current track plus the suggested fields. Nothing
 /// is written — the UI shows current→proposed and the user approves per field.
 #[derive(Debug, Clone, Serialize)]
@@ -257,8 +265,9 @@ pub async fn propose_enrichment(
 
 /// "Clean Track Data": dissect messy labels (e.g. junky YouTube titles) into
 /// proper title/artist/year fields and RETURN proposals without writing. Uses
-/// the free heuristic first, the LLM only when configured/permitted (capped),
-/// and no MusicBrainz lookups — so it's fast and works on non-catalog uploads.
+/// the free heuristic, the LLM only when configured/permitted (capped), then a
+/// free MusicBrainz lookup to fill the authoritative artist/album/year/cover.
+/// Paced to MusicBrainz's ~1 req/s courtesy limit.
 #[tauri::command]
 pub async fn clean_track_metadata(
     track_ids: Vec<i64>,
@@ -314,6 +323,9 @@ pub async fn clean_track_metadata(
             }
             Err(e) => eprintln!("clean {id} failed: {e}"),
         }
+
+        // Stay under MusicBrainz's ~1 req/s courtesy limit.
+        tokio::time::sleep(MB_COURTESY_DELAY).await;
     }
 
     let _ = app.emit(
@@ -334,6 +346,37 @@ pub async fn clean_track_metadata(
         spent_usd: spent,
         capped,
     })
+}
+
+/// "Look up tags" for a single track from the edit modal. Uses the (possibly
+/// user-corrected) title/artist shown in the dialog rather than the stored
+/// label, then runs the free→fingerprint→LLM chain and returns the suggestion.
+#[tauri::command]
+pub async fn lookup_track_tags(
+    track_id: i64,
+    title: String,
+    artist: String,
+    state: State<'_, AppState>,
+) -> AppResult<Option<MetadataSuggestion>> {
+    let db = state.db.clone();
+    let cfg = {
+        let conn = lock_unpoisoned(&db);
+        build_config(&conn)?
+    };
+    let mut track = {
+        let conn = lock_unpoisoned(&db);
+        db::get_track(&conn, track_id)?
+    };
+    if !title.trim().is_empty() {
+        track.title = Some(title.trim().to_string());
+    }
+    if !artist.trim().is_empty() {
+        track.artist = Some(artist.trim().to_string());
+    }
+    let outcome = enrich::enrich_track(&track, &cfg, true)
+        .await
+        .map_err(AppError::Other)?;
+    Ok(outcome.suggestion)
 }
 
 /// One approved edit from the review dialog. Each field carries the final
@@ -362,8 +405,14 @@ pub async fn apply_enrichment(
 ) -> AppResult<usize> {
     let db = state.db.clone();
     let mut applied = 0usize;
+    let total = edits.len();
 
-    for e in edits {
+    for (i, e) in edits.into_iter().enumerate() {
+        // Per-edit progress — cover-art downloads make a big batch slow.
+        let _ = app.emit(
+            "enrich-apply-progress",
+            ApplyProgress { done: i, total },
+        );
         let track = {
             let conn = lock_unpoisoned(&db);
             match db::get_track(&conn, e.track_id) {
@@ -384,6 +433,7 @@ pub async fn apply_enrichment(
             album: e.album.or(track.album.clone()),
             year: e.year.or(track.year),
             genre: e.genre.or(track.genre.clone()),
+            media_type: None,
         };
         let mbid = e.musicbrainz_id.clone();
         let track_id = e.track_id;
@@ -407,6 +457,7 @@ pub async fn apply_enrichment(
             applied += 1;
         }
     }
+    let _ = app.emit("enrich-apply-progress", ApplyProgress { done: total, total });
     Ok(applied)
 }
 

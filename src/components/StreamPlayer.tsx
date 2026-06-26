@@ -12,6 +12,10 @@ interface Props {
   onTime: (positionMs: number, durationMs: number) => void;
   onEnded: () => void;
   onClose: () => void;
+  /// When set, the player fills this measured rect (theater / in-app fullscreen)
+  /// instead of the small floating box. The iframe is never remounted, so
+  /// playback is uninterrupted.
+  theaterRect?: { top: number; left: number; width: number; height: number } | null;
 }
 
 function videoIdFrom(uri: string): string | null {
@@ -76,7 +80,17 @@ export default function StreamPlayer(props: Props) {
         else if (data.info === 1) cbRef.current.onPlayingChange(true);
         else if (data.info === 2) cbRef.current.onPlayingChange(false);
       } else if (data.event === "infoDelivery" && data.info && typeof data.info === "object") {
-        const info = data.info as { currentTime?: number; duration?: number };
+        const info = data.info as {
+          currentTime?: number;
+          duration?: number;
+          playerState?: number;
+        };
+        // youtube-nocookie embeds deliver state through infoDelivery.playerState
+        // — the standalone onStateChange event frequently never arrives over raw
+        // postMessage, so end-of-video MUST be detected here or playlists stall.
+        if (info.playerState === 0) cbRef.current.onEnded();
+        else if (info.playerState === 1) cbRef.current.onPlayingChange(true);
+        else if (info.playerState === 2) cbRef.current.onPlayingChange(false);
         if (typeof info.currentTime === "number") {
           cbRef.current.onTime(
             Math.round(info.currentTime * 1000),
@@ -129,9 +143,22 @@ export default function StreamPlayer(props: Props) {
 
   if (!videoId) return null;
 
+  const theater = props.theaterRect ?? null;
+  const theaterStyle = theater
+    ? {
+        position: "fixed" as const,
+        top: theater.top,
+        left: theater.left,
+        width: theater.width,
+        height: theater.height,
+        right: "auto" as const,
+        bottom: "auto" as const,
+      }
+    : undefined;
+
   return (
     <>
-      {docked && (
+      {docked && !theater && (
         <button
           className="stream-dock-tab"
           onClick={() => setDocked(false)}
@@ -141,7 +168,10 @@ export default function StreamPlayer(props: Props) {
           <SquarePlay size={14} className="stream-dock-icon" />
         </button>
       )}
-      <div className={`stream-player${docked ? " docked" : ""}`}>
+      <div
+        className={`stream-player${docked && !theater ? " docked" : ""}${theater ? " theater" : ""}`}
+        style={theaterStyle}
+      >
       <div className="stream-player-header">
         <span className="stream-player-title" title={track.title ?? ""}>
           <SquarePlay size={13} className="np-stream-icon" />

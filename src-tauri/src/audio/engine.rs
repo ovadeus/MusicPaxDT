@@ -88,6 +88,9 @@ pub struct Shared {
     pub recording: AtomicBool,
     pub rec_frames: AtomicU64,
     pub in_rate: AtomicU32,
+    /// Line-in software input gain (linear multiplier), applied by the relay
+    /// after DSP. Lets a quiet/phono-level source be lifted from inside the app.
+    pub in_gain_bits: AtomicU32,
     // Live broadcast tee. The realtime callback pushes post-volume stereo into a
     // per-stream ring when `broadcasting` is set; the broadcast worker drains the
     // CURRENT consumer (swapped in whenever the output stream is rebuilt, e.g. a
@@ -120,6 +123,7 @@ impl Shared {
             recording: AtomicBool::new(false),
             rec_frames: AtomicU64::new(0),
             in_rate: AtomicU32::new(44_100),
+            in_gain_bits: AtomicU32::new(1.0f32.to_bits()),
             broadcasting: AtomicBool::new(false),
             bcast_cons: Mutex::new(None),
         }
@@ -154,6 +158,11 @@ impl Shared {
 
     pub fn volume(&self) -> f32 {
         f32::from_bits(self.volume_bits.load(Ordering::Relaxed))
+    }
+
+    /// Line-in software input gain as a linear multiplier (1.0 = unity).
+    pub fn input_gain(&self) -> f32 {
+        f32::from_bits(self.in_gain_bits.load(Ordering::Relaxed))
     }
 
     fn zero_meters(&self) {
@@ -214,6 +223,7 @@ pub struct EngineStatus {
     pub riaa: bool,
     pub bass_db: f32,
     pub treble_db: f32,
+    pub input_gain_db: f32,
     pub recording: bool,
     pub recorded_ms: u64,
     pub state: PlaybackState,
@@ -313,6 +323,12 @@ impl EngineHandle {
             .store(params.treble_db.clamp(-12.0, 12.0).to_bits(), Ordering::Relaxed);
     }
 
+    /// Software input gain for the line-in monitor + recording, 0..40 dB.
+    pub fn set_input_gain(&self, db: f32) {
+        let lin = 10f32.powf(db.clamp(0.0, 40.0) / 20.0);
+        self.shared.in_gain_bits.store(lin.to_bits(), Ordering::Relaxed);
+    }
+
     pub fn start_recording(&self, path: std::path::PathBuf, format: RecordFormat) -> AppResult<()> {
         let (reply, rx) = mpsc::channel();
         self.send(Cmd::StartRecording {
@@ -339,6 +355,7 @@ impl EngineHandle {
             riaa: params.riaa,
             bass_db: params.bass_db,
             treble_db: params.treble_db,
+            input_gain_db: 20.0 * self.shared.input_gain().max(1e-6).log10(),
             recording: self.shared.recording.load(Ordering::Acquire),
             recorded_ms: self.shared.recorded_ms(),
             state: self.shared.playback_state(),
@@ -1008,6 +1025,7 @@ mod tests {
             uri: "https://example.com/stream".into(),
             source_kind: "radio".into(),
             capability,
+            media_type: "music".into(),
             fingerprint: None,
             musicbrainz_id: None,
             art_path: None,

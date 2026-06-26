@@ -18,6 +18,7 @@ export interface Track {
   uri: string;
   sourceKind: string;
   capability: Capability;
+  mediaType: MediaType;
   fingerprint: string | null;
   musicbrainzId: string | null;
   artPath: string | null;
@@ -25,6 +26,14 @@ export interface Track {
   playCount: number;
   addedAt: number;
 }
+
+export type MediaType =
+  | "music"
+  | "podcast"
+  | "audiobook"
+  | "movie"
+  | "radio"
+  | "tutorial";
 
 export interface ImportResult {
   imported: number;
@@ -72,6 +81,7 @@ export interface EngineStatus {
   riaa: boolean;
   bassDb: number;
   trebleDb: number;
+  inputGainDb: number;
   recording: boolean;
   recordedMs: number;
   state: PlaybackState;

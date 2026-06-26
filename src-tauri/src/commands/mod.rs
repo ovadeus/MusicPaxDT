@@ -62,6 +62,7 @@ pub async fn import_folder(path: String, state: State<'_, AppState>) -> AppResul
 pub async fn list_tracks(
     query: Option<String>,
     sort: Option<String>,
+    media_type: Option<String>,
     limit: Option<i64>,
     offset: Option<i64>,
     state: State<'_, AppState>,
@@ -73,6 +74,7 @@ pub async fn list_tracks(
             &conn,
             query.as_deref(),
             sort.as_deref(),
+            media_type.as_deref(),
             limit.unwrap_or(1000),
             offset.unwrap_or(0),
         )
@@ -164,6 +166,7 @@ pub async fn update_track_metadata(
     album: Option<String>,
     year: Option<i64>,
     genre: Option<String>,
+    media_type: Option<String>,
     state: State<'_, AppState>,
 ) -> AppResult<Track> {
     let db = state.db.clone();
@@ -174,6 +177,7 @@ pub async fn update_track_metadata(
             album,
             year,
             genre,
+            media_type,
         };
         let conn = lock_unpoisoned(&db);
         let track = db::update_track_metadata(&conn, track_id, &edit)?;
@@ -364,6 +368,14 @@ pub fn set_tone(bass_db: f32, treble_db: f32, state: State<'_, AppState>) -> Eng
     params.bass_db = bass_db;
     params.treble_db = treble_db;
     state.engine.set_dsp(params);
+    state.engine.status()
+}
+
+/// Software input gain (0..40 dB) for the line-in monitor + recording — lifts a
+/// quiet/phono-level source without leaving the app.
+#[tauri::command]
+pub fn set_input_gain(db: f32, state: State<'_, AppState>) -> EngineStatus {
+    state.engine.set_input_gain(db);
     state.engine.status()
 }
 

@@ -53,6 +53,7 @@ export default function EnrichReviewModal({
     return init;
   });
   const [busy, setBusy] = useState(false);
+  const [applyProgress, setApplyProgress] = useState<ipc.ApplyProgress | null>(null);
 
   const toggle = (trackId: number, field: string) => {
     setChecked((cur) => {
@@ -105,13 +106,18 @@ export default function EnrichReviewModal({
       return;
     }
     setBusy(true);
+    setApplyProgress({ done: 0, total: edits.length });
+    let unlisten: (() => void) | undefined;
     try {
+      unlisten = await ipc.onApplyProgress(setApplyProgress);
       const n = await ipc.applyEnrichment(edits);
       onApplied(n);
       onClose();
     } catch (e) {
       onError(`${e}`);
     } finally {
+      unlisten?.();
+      setApplyProgress(null);
       setBusy(false);
     }
   };
@@ -197,9 +203,29 @@ export default function EnrichReviewModal({
           })}
         </div>
 
+        {busy && applyProgress && applyProgress.total > 0 && (
+          <div className="mirror-progress">
+            <div className="mirror-progress-bar">
+              <div
+                className="mirror-progress-fill"
+                style={{ width: `${(applyProgress.done / applyProgress.total) * 100}%` }}
+              />
+            </div>
+            <div className="mirror-progress-text">
+              Applying {Math.min(applyProgress.done + 1, applyProgress.total)}/
+              {applyProgress.total} — writing tags{" "}
+              {applyProgress.done < applyProgress.total ? "and fetching cover art…" : ""}
+            </div>
+          </div>
+        )}
+
         <div className="addurl-actions">
           <button className="import-button" onClick={apply} disabled={busy}>
-            {busy ? "Applying…" : `Apply ${approvedCount} change(s)`}
+            {busy
+              ? applyProgress
+                ? `Applying ${applyProgress.done}/${applyProgress.total}…`
+                : "Applying…"
+              : `Apply ${approvedCount} change(s)`}
           </button>
         </div>
       </div>

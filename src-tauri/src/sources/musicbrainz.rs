@@ -159,19 +159,54 @@ fn cover_art_url(release_group_id: &str) -> String {
     format!("https://coverartarchive.org/release-group/{release_group_id}/front-500")
 }
 
+/// Strip a YouTube channel/uploader suffix from an artist so a stored label
+/// like "Bush - Topic" or "CrashTestDummiesVEVO" still matches MusicBrainz.
+fn sanitize_artist(a: &str) -> String {
+    let mut a = a.trim();
+    for suffix in [" - Topic", " - topic", " — Topic"] {
+        if let Some(stripped) = a.strip_suffix(suffix) {
+            a = stripped.trim();
+        }
+    }
+    if a.to_lowercase().ends_with("vevo") && a.len() > 4 {
+        a = a[..a.len() - 4].trim_end_matches([' ', '-', '_']).trim();
+    }
+    a.to_string()
+}
+
+/// Drop bracketed qualifiers — "(Remastered 2014)", "[Official Video]", "(HD)"
+/// — from a title so the query matches the canonical recording.
+fn sanitize_title(t: &str) -> String {
+    let mut out = String::with_capacity(t.len());
+    let mut depth = 0i32;
+    for ch in t.chars() {
+        match ch {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = (depth - 1).max(0),
+            _ if depth == 0 => out.push(ch),
+            _ => {}
+        }
+    }
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Look up a recording by artist + title. Returns a suggestion when a
-/// confident match is found. `artist` may be empty (title-only search).
+/// confident match is found. `artist` may be empty (title-only search). Inputs
+/// are sanitized first, so messy YouTube-derived labels still resolve.
 pub async fn lookup(artist: &str, title: &str) -> Result<Option<MetadataSuggestion>, String> {
-    let title = title.trim();
+    let title_clean = sanitize_title(title);
+    let title = if title_clean.is_empty() { title.trim() } else { title_clean.as_str() };
     if title.is_empty() {
         return Ok(None);
     }
-    let query = if artist.trim().is_empty() {
+    let artist_clean = sanitize_artist(artist);
+    let artist = artist_clean.as_str();
+    let query = if artist.is_empty() {
         format!("recording:\"{}\"", escape(title))
     } else {
         format!(
             "artist:\"{}\" AND recording:\"{}\"",
-            escape(artist.trim()),
+            escape(artist),
             escape(title)
         )
     };
@@ -334,6 +369,17 @@ mod tests {
         assert_eq!(escape("AC/DC"), "AC\\/DC");
         assert_eq!(escape("Sun (feat. X)"), "Sun \\(feat. X\\)");
         assert_eq!(escape("plain"), "plain");
+    }
+
+    #[test]
+    fn sanitizes_youtube_artist_and_title_noise() {
+        // The reported failing case: "Bush - Topic" / "Machinehead (Remastered 2014)".
+        assert_eq!(sanitize_artist("Bush - Topic"), "Bush");
+        assert_eq!(sanitize_artist("CrashTestDummiesVEVO"), "CrashTestDummies");
+        assert_eq!(sanitize_artist("Bush"), "Bush");
+        assert_eq!(sanitize_title("Machinehead (Remastered 2014)"), "Machinehead");
+        assert_eq!(sanitize_title("Song [Official Video] (HD)"), "Song");
+        assert_eq!(sanitize_title("Plain Title"), "Plain Title");
     }
 
     fn rel(

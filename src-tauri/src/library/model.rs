@@ -48,6 +48,8 @@ pub struct Track {
     pub uri: String,
     pub source_kind: String,
     pub capability: Capability,
+    /// User-facing media tag: music | podcast | audiobook | movie | radio | tutorial.
+    pub media_type: String,
     pub fingerprint: Option<String>,
     pub musicbrainz_id: Option<String>,
     pub art_path: Option<String>,

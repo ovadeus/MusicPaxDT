@@ -1,14 +1,24 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronRight, ExternalLink, ImagePlus } from "lucide-react";
+import { ChevronRight, ExternalLink, Maximize2 } from "lucide-react";
 import * as ipc from "../lib/ipc";
 import MpxLogo from "./MpxLogo";
 import type { Track } from "../lib/types";
+
+const MEDIA_VIDEO_EXTS = ["mp4", "m4v", "webm", "mov", "mkv", "ogv"];
+
+/// A media-override URL is treated as video by extension, else as an image.
+function isVideoMedia(url: string): boolean {
+  const path = url.split(/[?#]/)[0].toLowerCase();
+  return MEDIA_VIDEO_EXTS.some((e) => path.endsWith(`.${e}`));
+}
 
 interface Props {
   track: Track | null;
   curator: boolean;
   onCollapse: () => void;
   onError: (message: string) => void;
+  /// Expand the now-playing media to fill the app body (theater mode).
+  onExpand?: () => void;
 }
 
 /// Default cover when no loop video or album art is available — the MusicPax mark.
@@ -21,7 +31,13 @@ function youtubeThumb(uri: string): string | null {
   return m ? `https://i.ytimg.com/vi/${m[1]}/hqdefault.jpg` : null;
 }
 
-export default function NowPlayingPanel({ track, curator, onCollapse, onError }: Props) {
+export default function NowPlayingPanel({
+  track,
+  curator,
+  onCollapse,
+  onError,
+  onExpand,
+}: Props) {
   const [bio, setBio] = useState<ipc.ArtistBio | null>(null);
   const [bioLoading, setBioLoading] = useState(false);
   const [loopUrl, setLoopUrl] = useState("");
@@ -30,9 +46,6 @@ export default function NowPlayingPanel({ track, curator, onCollapse, onError }:
   const [imgFailed, setImgFailed] = useState(false);
   const [editingBio, setEditingBio] = useState(false);
   const [bioDraft, setBioDraft] = useState("");
-  const [coverUrl, setCoverUrl] = useState("");
-  const [editingCover, setEditingCover] = useState(false);
-  const [coverDraft, setCoverDraft] = useState("");
 
   const artist = track?.artist ?? null;
   const trackId = track?.id ?? null;
@@ -65,16 +78,14 @@ export default function NowPlayingPanel({ track, curator, onCollapse, onError }:
     }
   };
 
-  // Load this track's saved loop-video + custom cover URLs (settings:
-  // loopvideo.<id> / cover.<id>).
+  // Load this track's saved media override (settings: loopvideo.<id> — an image
+  // OR a video URL that overrides the cover).
   const loadedFor = useRef<number | null>(null);
   useEffect(() => {
     setImgFailed(false);
     setEditingLoop(false);
-    setEditingCover(false);
     if (trackId == null) {
       setLoopUrl("");
-      setCoverUrl("");
       return;
     }
     ipc
@@ -82,12 +93,8 @@ export default function NowPlayingPanel({ track, curator, onCollapse, onError }:
       .then((s) => {
         loadedFor.current = trackId;
         setLoopUrl(s[`loopvideo.${trackId}`] ?? "");
-        setCoverUrl(s[`cover.${trackId}`] ?? "");
       })
-      .catch(() => {
-        setLoopUrl("");
-        setCoverUrl("");
-      });
+      .catch(() => setLoopUrl(""));
   }, [trackId]);
 
   const saveLoop = async () => {
@@ -102,27 +109,16 @@ export default function NowPlayingPanel({ track, curator, onCollapse, onError }:
     }
   };
 
-  const saveCover = async () => {
-    if (trackId == null) return;
-    const url = coverDraft.trim();
-    try {
-      await ipc.setSetting(`cover.${trackId}`, url);
-      setCoverUrl(url);
-      setImgFailed(false);
-      setEditingCover(false);
-    } catch (e) {
-      onError(`${e}`);
-    }
-  };
-
-  // Media priority: 1) loop video, 2) custom cover, 3) album art / yt thumb,
-  // 4) default logo. artPath may be a remote URL (mpx import) or a local file
-  // path (enrich cache); only URLs/data load over the localhost origin.
+  // Media priority: 1) the curator media override (image OR video), 2) album
+  // art / yt thumb, 3) default logo. artPath may be a remote URL (mpx import)
+  // or a local file path (enrich cache); only URLs/data load over localhost.
   const artUrl =
     track?.artPath && /^(https?:|data:)/.test(track.artPath) ? track.artPath : null;
-  const cover = coverUrl || artUrl || (track ? youtubeThumb(track.uri) : null);
-  const showVideo = loopUrl.length > 0;
-  const showImage = !showVideo && !!cover && !imgFailed;
+  const albumArt = artUrl || (track ? youtubeThumb(track.uri) : null);
+  const override = loopUrl.trim();
+  const showVideo = override !== "" && isVideoMedia(override);
+  const imageSrc = override !== "" ? (showVideo ? null : override) : albumArt;
+  const showImage = !showVideo && !!imageSrc && !imgFailed;
 
   return (
     <aside className="now-playing-panel">
@@ -144,52 +140,33 @@ export default function NowPlayingPanel({ track, curator, onCollapse, onError }:
             {showVideo ? (
               <video
                 className="np-media-el"
-                src={loopUrl}
+                src={override}
                 autoPlay
                 loop
                 muted
                 playsInline
-                onError={() => onError("Loop video failed to load")}
+                onError={() => onError("Media failed to load")}
               />
             ) : showImage ? (
               <img
                 className="np-media-el"
-                src={cover ?? undefined}
+                src={imageSrc ?? undefined}
                 alt=""
                 onError={() => setImgFailed(true)}
               />
             ) : (
               <DefaultCover />
             )}
-            {curator && !showVideo && (
+            {onExpand && (
               <button
-                className="np-cover-edit"
-                title={coverUrl ? "Change cover image" : "Add cover image"}
-                onClick={() => {
-                  setCoverDraft(coverUrl);
-                  setEditingCover((v) => !v);
-                }}
+                className="np-expand"
+                title="Full screen (theater)"
+                onClick={onExpand}
               >
-                <ImagePlus size={14} />
+                <Maximize2 size={14} />
               </button>
             )}
           </div>
-
-          {curator && editingCover && (
-            <div className="np-loop-field">
-              <input
-                type="url"
-                placeholder="Cover image URL (jpg/png/webp)"
-                value={coverDraft}
-                autoFocus
-                onChange={(e) => setCoverDraft(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && saveCover()}
-              />
-              <button className="np-loop-save" onClick={saveCover}>
-                Save
-              </button>
-            </div>
-          )}
 
           <div className="np-artist-line">{track.artist ?? "Unknown artist"}</div>
           <div className="np-song-line">{track.title ?? "Untitled"}</div>
@@ -201,7 +178,7 @@ export default function NowPlayingPanel({ track, curator, onCollapse, onError }:
                 <>
                   <input
                     type="url"
-                    placeholder="Loop video URL (mp4/webm, ~8s)"
+                    placeholder="image or video loop URL (jpg/png/webp | mp4/webm, ~8s)"
                     value={loopDraft}
                     autoFocus
                     onChange={(e) => setLoopDraft(e.target.value)}
@@ -219,7 +196,7 @@ export default function NowPlayingPanel({ track, curator, onCollapse, onError }:
                     setEditingLoop(true);
                   }}
                 >
-                  {loopUrl ? "Edit loop video" : "Add loop video"}
+                  {loopUrl ? "Change media" : "Add media"}
                 </button>
               )}
             </div>

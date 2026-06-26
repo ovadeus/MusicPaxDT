@@ -357,9 +357,12 @@ fn relay_loop(
         }
 
         let recording = shared.recording.load(Ordering::Acquire);
+        let gain = f32::from_bits(shared.in_gain_bits.load(Ordering::Relaxed));
         for frame in frame_buf[..n].chunks_exact_mut(2) {
             let (mut l, mut r) = (frame[0], frame[1]);
             chain.process(&mut l, &mut r);
+            l *= gain;
+            r *= gain;
             frame[0] = l;
             frame[1] = r;
             if recording && record.slots() >= 2 {

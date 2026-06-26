@@ -13,6 +13,8 @@ interface Props {
   onEnded: () => void;
   onClose: () => void;
   onError: (message: string) => void;
+  /// When set, the video fills this measured rect (theater / in-app fullscreen).
+  theaterRect?: { top: number; left: number; width: number; height: number } | null;
 }
 
 const VIDEO_EXTS = ["mp4", "m4v", "webm", "mov", "mkv", "avi", "ogv"];
@@ -91,10 +93,23 @@ export default function DirectStreamPlayer(props: Props) {
   // Audio-only: a hidden element is enough (it still plays).
   if (!isVideo) return media(false);
 
+  const theater = props.theaterRect ?? null;
+  const theaterStyle = theater
+    ? {
+        position: "fixed" as const,
+        top: theater.top,
+        left: theater.left,
+        width: theater.width,
+        height: theater.height,
+        right: "auto" as const,
+        bottom: "auto" as const,
+      }
+    : undefined;
+
   // Video: a small dockable player, mirroring the YouTube embed chrome.
   return (
     <>
-      {docked && (
+      {docked && !theater && (
         <button
           className="stream-dock-tab"
           onClick={() => setDocked(false)}
@@ -104,7 +119,10 @@ export default function DirectStreamPlayer(props: Props) {
           <Music size={14} className="stream-dock-icon" />
         </button>
       )}
-      <div className={`stream-player${docked ? " docked" : ""}`}>
+      <div
+        className={`stream-player${docked && !theater ? " docked" : ""}${theater ? " theater" : ""}`}
+        style={theaterStyle}
+      >
         <div className="stream-player-header">
           <span className="stream-player-title" title={track.title ?? ""}>
             <Music size={13} className="np-stream-icon" />

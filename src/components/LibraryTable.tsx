@@ -10,7 +10,8 @@ import {
   Square,
   SquarePlay,
 } from "lucide-react";
-import type { PlaylistInfo, SortField, SortSpec, Track } from "../lib/types";
+import { MEDIA_TYPES, mediaTypeMeta } from "../lib/mediaTypes";
+import type { MediaType, PlaylistInfo, SortField, SortSpec, Track } from "../lib/types";
 
 interface Props {
   tracks: Track[];
@@ -28,6 +29,11 @@ interface Props {
   nowPlayingId: number | null;
   playlists: PlaylistInfo[];
   onAddToPlaylist: (playlistId: number, trackId: number) => void;
+  /// Media-type filter chips (All + the 6 types). Shown when onMediaType is set.
+  mediaType?: MediaType | null;
+  onMediaType?: (t: MediaType | null) => void;
+  /// Curator inline-rename of the heading (e.g. a playlist title). Shows a pencil.
+  onRenameHeading?: (name: string) => void;
 }
 
 /// Icon per capability, refined by source (YouTube streams get the YouTube
@@ -91,12 +97,13 @@ const COLUMNS: Column[] = [
     label: "Length",
     cell: (t) => formatDuration(t.durationMs),
     num: true,
+    hideWhenNarrow: true,
   },
 ];
 
-// Below this content width, drop Album/Genre/Year to keep Title/Artist/Length
-// readable (e.g. when the Now Playing panel is open on a small window).
-const COMPACT_WIDTH = 620;
+// Below this content width, drop Album/Genre/Year/Length to keep Title/Artist
+// readable (e.g. a small window, or the Now Playing panel open in Curator mode).
+const COMPACT_WIDTH = 680;
 
 // Columns the user can manually collapse to a single icon to streamline the list.
 const COLLAPSIBLE: ReadonlySet<SortField> = new Set(["album", "genre", "year"]);
@@ -135,7 +142,19 @@ export default function LibraryTable(props: Props) {
     nowPlayingId,
     playlists,
     onAddToPlaylist,
+    mediaType,
+    onMediaType,
+    onRenameHeading,
   } = props;
+
+  const [editingHeading, setEditingHeading] = useState(false);
+  const [headingDraft, setHeadingDraft] = useState("");
+  const cancelHeading = useRef(false);
+  const commitHeading = () => {
+    setEditingHeading(false);
+    const name = headingDraft.trim();
+    if (name && name !== heading) onRenameHeading?.(name);
+  };
 
   // Hide secondary columns when the table is narrow.
   const sectionRef = useRef<HTMLElement | null>(null);
@@ -179,7 +198,46 @@ export default function LibraryTable(props: Props) {
   return (
     <section className="library" ref={sectionRef}>
       <div className="library-toolbar">
-        {heading && <h2 className="library-heading">{heading}</h2>}
+        {heading &&
+          (editingHeading && curator ? (
+            <input
+              className="library-heading-input"
+              autoFocus
+              value={headingDraft}
+              onChange={(e) => setHeadingDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
+                else if (e.key === "Escape") {
+                  cancelHeading.current = true;
+                  e.currentTarget.blur();
+                }
+              }}
+              onBlur={() => {
+                if (cancelHeading.current) {
+                  cancelHeading.current = false;
+                  setEditingHeading(false);
+                } else {
+                  commitHeading();
+                }
+              }}
+            />
+          ) : (
+            <span className="library-heading-row">
+              <h2 className="library-heading">{heading}</h2>
+              {curator && onRenameHeading && (
+                <button
+                  className="library-heading-edit"
+                  title="Rename playlist"
+                  onClick={() => {
+                    setHeadingDraft(heading);
+                    setEditingHeading(true);
+                  }}
+                >
+                  <Pencil size={13} />
+                </button>
+              )}
+            </span>
+          ))}
         {searchable && (
           <input
             type="search"
@@ -192,6 +250,26 @@ export default function LibraryTable(props: Props) {
         <span className="track-count">
           {tracks.length} track{tracks.length === 1 ? "" : "s"}
         </span>
+        {onMediaType && (
+          <div className="mtype-chips" role="tablist" aria-label="Filter by type">
+            <button
+              className={`mtype-chip${mediaType == null ? " active" : ""}`}
+              onClick={() => onMediaType(null)}
+            >
+              All
+            </button>
+            {MEDIA_TYPES.map((m) => (
+              <button
+                key={m.key}
+                className={`mtype-chip${mediaType === m.key ? " active" : ""}`}
+                title={m.label}
+                onClick={() => onMediaType(mediaType === m.key ? null : m.key)}
+              >
+                <m.Icon size={15} style={{ color: m.color }} />
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       <div className="library-scroll">
         <table className="library-table">
@@ -200,6 +278,7 @@ export default function LibraryTable(props: Props) {
               <th className="cap-col" title="Capability">
                 <Flag size={12} />
               </th>
+              <th className="type-col">Type</th>
               {columns.map((c) => {
                 const collapsible = COLLAPSIBLE.has(c.field);
                 const isCollapsed = collapsible && collapsed.has(c.field);
@@ -235,7 +314,7 @@ export default function LibraryTable(props: Props) {
           <tbody>
             {tracks.length === 0 ? (
               <tr>
-                <td className="empty-row" colSpan={columns.length + 1 + (curator ? 1 : 0)}>
+                <td className="empty-row" colSpan={columns.length + 2 + (curator ? 1 : 0)}>
                   {heading
                     ? "This playlist is empty — add tracks with the + button."
                     : "Library is empty — use “Import Folder” or “Add URL” to add music."}
@@ -255,6 +334,17 @@ export default function LibraryTable(props: Props) {
                         <cap.Icon size={15} />
                       </span>
                     </td>
+                    {(() => {
+                      const mt = mediaTypeMeta(t.mediaType);
+                      return (
+                        <td className="type-col">
+                          <span className="type-badge" title={mt.label}>
+                            <mt.Icon size={14} style={{ color: mt.color }} />
+                            <span className="type-label">{mt.label}</span>
+                          </span>
+                        </td>
+                      );
+                    })()}
                     {columns.map((c) => {
                       const isCollapsed = COLLAPSIBLE.has(c.field) && collapsed.has(c.field);
                       const cls = [c.num ? "num" : "", isCollapsed ? "col-collapsed" : ""]

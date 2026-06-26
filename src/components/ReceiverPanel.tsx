@@ -51,6 +51,7 @@ export default function ReceiverPanel(props: Props) {
   const riaa = status?.riaa ?? false;
   const bass = status?.bassDb ?? 0;
   const treble = status?.trebleDb ?? 0;
+  const gain = status?.inputGainDb ?? 0;
   const monitoring = status?.state === "playing";
 
   const handleInput = async (deviceId: string) => {
@@ -72,6 +73,14 @@ export default function ReceiverPanel(props: Props) {
   const handleTone = async (nextBass: number, nextTreble: number) => {
     try {
       onStatus(await ipc.setTone(nextBass, nextTreble));
+    } catch (e) {
+      onError(`${e}`);
+    }
+  };
+
+  const handleGain = async (db: number) => {
+    try {
+      onStatus(await ipc.setInputGain(db));
     } catch (e) {
       onError(`${e}`);
     }
@@ -117,6 +126,21 @@ export default function ReceiverPanel(props: Props) {
               </option>
             ))}
           </select>
+        </label>
+
+        <label
+          className="receiver-field"
+          title="Software boost for a quiet / phono-level source. A hardware preamp is cleaner, but this gets you listening from inside the app."
+        >
+          <span className="field-label">Input gain +{gain.toFixed(0)} dB</span>
+          <input
+            type="range"
+            min={0}
+            max={40}
+            step={1}
+            value={gain}
+            onChange={(e) => handleGain(Number(e.target.value))}
+          />
         </label>
 
         <label className="receiver-field riaa-toggle" title="RIAA de-emphasis for turntables with no phono preamp">
