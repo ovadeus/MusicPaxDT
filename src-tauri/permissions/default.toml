@@ -29,6 +29,7 @@ commands.allow = [
     "set_riaa",
     "set_tone",
     "set_input_gain",
+    "set_mini_window",
     "engine_status",
     "start_recording",
     "stop_recording",

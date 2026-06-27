@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronRight, ExternalLink, Maximize2 } from "lucide-react";
+import { ChevronRight, ExternalLink, Pencil, Plus } from "lucide-react";
 import * as ipc from "../lib/ipc";
+import Markdown from "./Markdown";
+import MarkdownCheatSheet from "./MarkdownCheatSheet";
 import MpxLogo from "./MpxLogo";
 import type { Track } from "../lib/types";
 
@@ -17,8 +19,6 @@ interface Props {
   curator: boolean;
   onCollapse: () => void;
   onError: (message: string) => void;
-  /// Expand the now-playing media to fill the app body (theater mode).
-  onExpand?: () => void;
 }
 
 /// Default cover when no loop video or album art is available — the MusicPax mark.
@@ -36,7 +36,6 @@ export default function NowPlayingPanel({
   curator,
   onCollapse,
   onError,
-  onExpand,
 }: Props) {
   const [bio, setBio] = useState<ipc.ArtistBio | null>(null);
   const [bioLoading, setBioLoading] = useState(false);
@@ -46,6 +45,11 @@ export default function NowPlayingPanel({
   const [imgFailed, setImgFailed] = useState(false);
   const [editingBio, setEditingBio] = useState(false);
   const [bioDraft, setBioDraft] = useState("");
+  const [tab, setTab] = useState<"about" | "notes">("about");
+  const [notes, setNotes] = useState("");
+  const [editingNotes, setEditingNotes] = useState(false);
+  const [notesDraft, setNotesDraft] = useState("");
+  const [cheatOpen, setCheatOpen] = useState(false);
 
   const artist = track?.artist ?? null;
   const trackId = track?.id ?? null;
@@ -84,8 +88,10 @@ export default function NowPlayingPanel({
   useEffect(() => {
     setImgFailed(false);
     setEditingLoop(false);
+    setEditingNotes(false);
     if (trackId == null) {
       setLoopUrl("");
+      setNotes("");
       return;
     }
     ipc
@@ -93,9 +99,41 @@ export default function NowPlayingPanel({
       .then((s) => {
         loadedFor.current = trackId;
         setLoopUrl(s[`loopvideo.${trackId}`] ?? "");
+        setNotes(s[`linernotes.${trackId}`] ?? "");
       })
-      .catch(() => setLoopUrl(""));
+      .catch(() => {
+        setLoopUrl("");
+        setNotes("");
+      });
   }, [trackId]);
+
+  const startEditNotes = () => {
+    setNotesDraft(notes);
+    setEditingNotes(true);
+  };
+
+  const saveNotes = async () => {
+    if (trackId == null) return;
+    try {
+      await ipc.setSetting(`linernotes.${trackId}`, notesDraft);
+      setNotes(notesDraft);
+      setEditingNotes(false);
+    } catch (e) {
+      onError(`${e}`);
+    }
+  };
+
+  const deleteNotes = async () => {
+    if (trackId == null) return;
+    try {
+      await ipc.setSetting(`linernotes.${trackId}`, "");
+      setNotes("");
+      setNotesDraft("");
+      setEditingNotes(false);
+    } catch (e) {
+      onError(`${e}`);
+    }
+  };
 
   const saveLoop = async () => {
     if (trackId == null) return;
@@ -108,6 +146,17 @@ export default function NowPlayingPanel({
       onError(`${e}`);
     }
   };
+
+  // Opens the Markdown cheat sheet — shown beside the liner-notes controls.
+  const mdHelp = (
+    <button
+      className="np-md-help"
+      title="Markdown cheat sheet"
+      onClick={() => setCheatOpen(true)}
+    >
+      MD
+    </button>
+  );
 
   // Media priority: 1) the curator media override (image OR video), 2) album
   // art / yt thumb, 3) default logo. artPath may be a remote URL (mpx import)
@@ -136,6 +185,20 @@ export default function NowPlayingPanel({
         </div>
       ) : (
         <div className="np-body">
+          <div className="np-tabs">
+            <button
+              className={`np-tab${tab === "about" ? " active" : ""}`}
+              onClick={() => setTab("about")}
+            >
+              About
+            </button>
+            <button
+              className={`np-tab${tab === "notes" ? " active" : ""}`}
+              onClick={() => setTab("notes")}
+            >
+              My Liner Notes
+            </button>
+          </div>
           <div className="np-media">
             {showVideo ? (
               <video
@@ -157,22 +220,13 @@ export default function NowPlayingPanel({
             ) : (
               <DefaultCover />
             )}
-            {onExpand && (
-              <button
-                className="np-expand"
-                title="Full screen (theater)"
-                onClick={onExpand}
-              >
-                <Maximize2 size={14} />
-              </button>
-            )}
           </div>
 
           <div className="np-artist-line">{track.artist ?? "Unknown artist"}</div>
           <div className="np-song-line">{track.title ?? "Untitled"}</div>
           {track.album && <div className="np-album-line">{track.album}</div>}
 
-          {curator && (
+          {tab === "about" && curator && (
             <div className="np-loop-field">
               {editingLoop ? (
                 <>
@@ -202,6 +256,7 @@ export default function NowPlayingPanel({
             </div>
           )}
 
+          {tab === "about" && (
           <div className="np-bio">
             {bioLoading && <p className="np-bio-loading">Loading bio…</p>}
             {!bioLoading && editingBio ? (
@@ -258,8 +313,65 @@ export default function NowPlayingPanel({
               )
             )}
           </div>
+          )}
+
+          {tab === "notes" && (
+            <div className="np-notes">
+              {curator && editingNotes ? (
+                <div className="np-bio-edit">
+                  <textarea
+                    className="np-bio-textarea"
+                    rows={14}
+                    placeholder="Liner notes — Markdown supported (## heading, **bold**, - list, [link](url))…"
+                    value={notesDraft}
+                    autoFocus
+                    onChange={(e) => setNotesDraft(e.target.value)}
+                  />
+                  <div className="np-notes-actions">
+                    <button className="np-loop-save" onClick={saveNotes}>
+                      Save
+                    </button>
+                    <button className="np-bio-cancel" onClick={() => setEditingNotes(false)}>
+                      Cancel
+                    </button>
+                    {mdHelp}
+                    {notes.trim() && (
+                      <button className="np-notes-delete" onClick={deleteNotes}>
+                        Delete
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ) : notes.trim() ? (
+                <>
+                  {curator && (
+                    <div className="np-notes-bar">
+                      {mdHelp}
+                      <button className="np-notes-btn" onClick={startEditNotes}>
+                        <Pencil size={13} /> Edit notes
+                      </button>
+                    </div>
+                  )}
+                  <Markdown className="np-notes-md" text={notes} />
+                </>
+              ) : (
+                <div className="np-notes-empty">
+                  <p className="np-bio-loading">No liner notes yet.</p>
+                  {curator && (
+                    <div className="np-notes-bar np-notes-bar-left">
+                      {mdHelp}
+                      <button className="np-notes-btn" onClick={startEditNotes}>
+                        <Plus size={14} /> Add liner notes
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
+      {cheatOpen && <MarkdownCheatSheet onClose={() => setCheatOpen(false)} />}
     </aside>
   );
 }

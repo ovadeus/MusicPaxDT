@@ -13,8 +13,15 @@ interface Props {
   onEnded: () => void;
   onClose: () => void;
   onError: (message: string) => void;
-  /// When set, the video fills this measured rect (theater / in-app fullscreen).
-  theaterRect?: { top: number; left: number; width: number; height: number } | null;
+  /// When set, the video fills this measured rect (theater / in-app fullscreen /
+  /// mini-player cover). Optional `z` lifts it above the mini overlay.
+  theaterRect?: {
+    top: number;
+    left: number;
+    width: number;
+    height: number;
+    z?: number;
+  } | null;
 }
 
 const VIDEO_EXTS = ["mp4", "m4v", "webm", "mov", "mkv", "avi", "ogv"];
@@ -103,6 +110,7 @@ export default function DirectStreamPlayer(props: Props) {
         height: theater.height,
         right: "auto" as const,
         bottom: "auto" as const,
+        zIndex: theater.z,
       }
     : undefined;
 

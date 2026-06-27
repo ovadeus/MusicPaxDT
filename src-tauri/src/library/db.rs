@@ -70,6 +70,16 @@ fn migrate(conn: &Connection) -> AppResult<()> {
         )?;
         conn.pragma_update(None, "user_version", 2)?;
     }
+    if version < 3 {
+        // Backfill the unambiguous case: radio stations imported before media
+        // types existed are still tagged the 'music' default. Tag them Radio so
+        // the type filter chips work. (Other sources can't be inferred.)
+        conn.execute_batch(
+            "UPDATE tracks SET media_type = 'radio'
+             WHERE source_kind = 'radio' AND media_type = 'music';",
+        )?;
+        conn.pragma_update(None, "user_version", 3)?;
+    }
     Ok(())
 }
 
@@ -103,10 +113,14 @@ fn track_from_row(row: &Row) -> rusqlite::Result<Track> {
 
 /// Insert a track; returns false (skipped) when a track with the same uri exists.
 pub fn insert_track(conn: &Connection, t: &NewTrack, added_at: i64) -> AppResult<bool> {
+    // Derive an initial media type from the source where it's unambiguous
+    // (a radio station is Radio); everything else starts as Music and can be
+    // re-tagged from the edit dialog. Keeps the type filter chips meaningful.
+    let media_type = media_type_for_source(&t.source_kind);
     let changed = conn.execute(
         "INSERT OR IGNORE INTO tracks
-            (title, artist, album, year, genre, duration_ms, uri, source_kind, capability, added_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            (title, artist, album, year, genre, duration_ms, uri, source_kind, capability, media_type, added_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             t.title,
             t.artist,
@@ -117,10 +131,20 @@ pub fn insert_track(conn: &Connection, t: &NewTrack, added_at: i64) -> AppResult
             t.uri,
             t.source_kind,
             t.capability.as_str(),
+            media_type,
             added_at
         ],
     )?;
     Ok(changed > 0)
+}
+
+/// Default media type implied by a track's source. Only `radio` is certain;
+/// all other sources start as `music` (the user re-tags from the edit dialog).
+pub fn media_type_for_source(source_kind: &str) -> &'static str {
+    match source_kind {
+        "radio" => "radio",
+        _ => "music",
+    }
 }
 
 pub fn get_track(conn: &Connection, id: i64) -> AppResult<Track> {
@@ -452,7 +476,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
         // FTS5 table exists and is queryable
         let count: i64 = conn
             .query_row("SELECT count(*) FROM tracks_fts", [], |r| r.get(0))
@@ -596,5 +620,24 @@ mod tests {
         insert_track(&conn, &t, 1).unwrap();
         let all = list_tracks(&conn, None, None, None, 10, 0).unwrap();
         assert_eq!(all[0].capability, Capability::StreamPlayable);
+    }
+
+    #[test]
+    fn radio_source_gets_radio_media_type_and_filters() {
+        let conn = mem_db();
+        let song = new_track("A Song", "An Artist", "/m/a.flac"); // source_kind = local
+        insert_track(&conn, &song, 1).unwrap();
+        let mut station = new_track("A Station", "Broadcaster", "https://stream.example/live");
+        station.capability = Capability::StreamPlayable;
+        station.source_kind = "radio".into();
+        insert_track(&conn, &station, 2).unwrap();
+
+        // Radio-source rows are tagged 'radio'; every other source stays 'music'.
+        let radio = list_tracks(&conn, None, None, Some("radio"), 10, 0).unwrap();
+        assert_eq!(radio.len(), 1);
+        assert_eq!(radio[0].title.as_deref(), Some("A Station"));
+        let music = list_tracks(&conn, None, None, Some("music"), 10, 0).unwrap();
+        assert_eq!(music.len(), 1);
+        assert_eq!(music[0].title.as_deref(), Some("A Song"));
     }
 }

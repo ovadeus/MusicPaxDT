@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { ChevronLeft, Minimize2, Settings as SettingsIcon } from "lucide-react";
+import {
+  ChevronLeft,
+  Film,
+  Image as ImageIcon,
+  Maximize2,
+  Minimize2,
+  PictureInPicture2,
+  Settings as SettingsIcon,
+} from "lucide-react";
 import MpxLogo from "./components/MpxLogo";
 import ManageMusicMenu from "./components/ManageMusicMenu";
 import GoLivePanel from "./components/GoLivePanel";
@@ -16,6 +24,7 @@ import DirectStreamPlayer from "./components/DirectStreamPlayer";
 import TrackEditModal from "./components/TrackEditModal";
 import LibraryTable from "./components/LibraryTable";
 import Logo from "./components/Logo";
+import MiniPlayer from "./components/MiniPlayer";
 import NowPlayingBar from "./components/NowPlayingBar";
 import PlaylistSidebar, { type LibraryView } from "./components/PlaylistSidebar";
 import ReceiverPanel from "./components/ReceiverPanel";
@@ -77,6 +86,9 @@ function sortTracks(list: Track[], sort: SortSpec): Track[] {
 export default function App() {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [view, setView] = useState<LibraryView>({ kind: "all" });
+  // When set, the library shows only this artist's tracks (across all sources).
+  // Cleared by selecting anything in the sidebar (e.g. "All Tracks").
+  const [artistFilter, setArtistFilter] = useState<string | null>(null);
   const [playlists, setPlaylists] = useState<PlaylistInfo[]>([]);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortSpec>({ field: "added_at", dir: "desc" });
@@ -104,6 +116,18 @@ export default function App() {
   });
   const [goLiveOpen, setGoLiveOpen] = useState(false);
   // Theater (in-app fullscreen) for the now-playing media.
+  const [mini, setMini] = useState(false);
+  const [miniVideo, setMiniVideo] = useState(false);
+  const miniCoverRef = useRef<HTMLDivElement | null>(null);
+  const [miniRect, setMiniRect] = useState<
+    { top: number; left: number; width: number; height: number } | null
+  >(null);
+  const toggleMini = useCallback((on: boolean) => {
+    setMini(on);
+    if (on) setTheater(false);
+    else setMiniVideo(false);
+    ipc.setMiniWindow(on).catch(() => {});
+  }, []);
   const [theater, setTheater] = useState(false);
   const [theaterRect, setTheaterRect] = useState<
     { top: number; left: number; width: number; height: number } | null
@@ -161,24 +185,31 @@ export default function App() {
   const refreshTracks = useCallback(async () => {
     try {
       const mediaType = mediaTypeFilter;
+      let ts: Track[];
       if (source === "stream") {
         // The Stream view is the library, filtered to direct-stream tracks.
         const all = await ipc.listTracks({ query, sort, mediaType });
-        setTracks(all.filter((t) => t.sourceKind === "stream"));
+        ts = all.filter((t) => t.sourceKind === "stream");
       } else if (view.kind === "playlist") {
         // Playlist rows come in curated position order; apply the active column
         // sort client-side (server sort only covers the library query). The type
         // filter is also applied client-side for playlists.
-        let ts = sortTracks(await ipc.playlistTracks(view.id), sort);
+        ts = sortTracks(await ipc.playlistTracks(view.id), sort);
         if (mediaType) ts = ts.filter((t) => t.mediaType === mediaType);
-        setTracks(ts);
       } else {
-        setTracks(await ipc.listTracks({ query, sort, mediaType }));
+        ts = await ipc.listTracks({ query, sort, mediaType });
       }
+      // Artist filter is applied last so it narrows whatever set is loaded —
+      // for "all of an artist from all sources" this runs over the full library.
+      if (artistFilter) {
+        const a = artistFilter.trim().toLowerCase();
+        ts = ts.filter((t) => (t.artist ?? "").trim().toLowerCase() === a);
+      }
+      setTracks(ts);
     } catch (e) {
       showStatus(`Failed to load library: ${e}`);
     }
-  }, [view, query, sort, showStatus, source, mediaTypeFilter]);
+  }, [view, query, sort, showStatus, source, mediaTypeFilter, artistFilter]);
 
   // Debounced refresh on view/search/sort change.
   const debounce = useRef<number | undefined>(undefined);
@@ -187,6 +218,16 @@ export default function App() {
     debounce.current = window.setTimeout(refreshTracks, 150);
     return () => window.clearTimeout(debounce.current);
   }, [refreshTracks]);
+
+  // Click an artist name → show every track by that artist, from all sources.
+  // Resets to the whole-library view (and the "library" source) so nothing is
+  // scoped to a playlist or the stream/radio panels.
+  const filterByArtist = useCallback((artist: string) => {
+    setArtistFilter(artist);
+    setView({ kind: "all" });
+    setSource("library");
+    setQuery("");
+  }, []);
 
   // Devices, playlists, format label + engine event subscriptions.
   useEffect(() => {
@@ -569,6 +610,38 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [theater]);
 
+  // Mini player: measure the cover slot so the live video (when toggled on) can
+  // fill it on top of the mini overlay.
+  useEffect(() => {
+    if (!mini || !theaterVideo) {
+      setMiniRect(null);
+      return;
+    }
+    const measure = () => {
+      const el = miniCoverRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      setMiniRect({ top: r.top, left: r.left, width: r.width, height: r.height });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    if (miniCoverRef.current) ro.observe(miniCoverRef.current);
+    window.addEventListener("resize", measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [mini, theaterVideo]);
+
+  // The rect the floating video players fill: the theater stage, or the mini
+  // cover slot (lifted above the mini overlay), or nowhere.
+  const videoRect =
+    theater && theaterVideo
+      ? theaterRect
+      : mini && miniVideo && theaterVideo && miniRect
+        ? { ...miniRect, z: 250 }
+        : null;
+
   const handleStop = async () => {
     setStream(null);
     try {
@@ -619,6 +692,21 @@ export default function App() {
               />
             </>
           )}
+          <button
+            className="settings-button"
+            onClick={() => toggleMini(true)}
+            title="Mini player"
+          >
+            <PictureInPicture2 size={16} />
+          </button>
+          <button
+            className="settings-button"
+            onClick={() => setTheater(!theater)}
+            disabled={!theater && !detailTrack}
+            title={theater ? "Exit full screen" : "Full screen (theater)"}
+          >
+            {theater ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+          </button>
           <button
             className="settings-button"
             onClick={() => setSettingsOpen(true)}
@@ -682,6 +770,7 @@ export default function App() {
             />
             <LibraryTable
               tracks={tracks}
+              onArtist={filterByArtist}
               searchable
               query={query}
               onQueryChange={setQuery}
@@ -731,7 +820,10 @@ export default function App() {
             view={view}
             curator={curator}
             width={sidebarWidth}
-            onSelect={setView}
+            onSelect={(v) => {
+              setArtistFilter(null);
+              setView(v);
+            }}
             onPlayPlaylist={playPlaylist}
             onCreate={(name) => {
               ipc
@@ -760,7 +852,8 @@ export default function App() {
           />
           <LibraryTable
             tracks={tracks}
-            heading={view.kind === "playlist" ? view.name : undefined}
+            onArtist={filterByArtist}
+            heading={artistFilter ?? (view.kind === "playlist" ? view.name : undefined)}
             onRenameHeading={
               view.kind === "playlist"
                 ? (name) => {
@@ -776,7 +869,7 @@ export default function App() {
                   }
                 : undefined
             }
-            searchable={view.kind === "all"}
+            searchable={view.kind === "all" && !artistFilter}
             query={query}
             onQueryChange={setQuery}
             sort={sort}
@@ -815,7 +908,6 @@ export default function App() {
           curator={curator}
           onCollapse={() => toggleNowPlaying(false)}
           onError={showStatus}
-          onExpand={() => setTheater(true)}
         />
       ) : (
         <button
@@ -866,7 +958,7 @@ export default function App() {
           onEnded={() => advanceFromEnd(stream.id)}
           onClose={() => setStream(null)}
           onError={showStatus}
-          theaterRect={theater && theaterVideo ? theaterRect : null}
+          theaterRect={videoRect}
         />
       )}
 
@@ -884,20 +976,10 @@ export default function App() {
           }}
           onEnded={() => advanceFromEnd(stream.id)}
           onClose={() => setStream(null)}
-          theaterRect={theater && theaterVideo ? theaterRect : null}
+          theaterRect={videoRect}
         />
       )}
 
-      {theater && theaterRect && (
-        <button
-          className="theater-close"
-          title="Exit full screen (Esc)"
-          style={{ top: theaterRect.top + 12, left: theaterRect.left + theaterRect.width - 46 }}
-          onClick={() => setTheater(false)}
-        >
-          <Minimize2 size={16} />
-        </button>
-      )}
 
       <NowPlayingBar
         track={
@@ -929,6 +1011,52 @@ export default function App() {
         canStep={!lineIn && (stream != null || now != null)}
         vuSynthetic={stream != null}
       />
+
+      {mini && (
+        <MiniPlayer
+          track={lineIn ? null : detailTrack}
+          cover={theaterCover}
+          playing={stream ? streamPlaying : playState === "playing"}
+          positionMs={stream ? streamPos : positionMs}
+          durationMs={
+            stream
+              ? streamDur > 0
+                ? streamDur
+                : (detailTrack?.durationMs ?? 0)
+              : (now?.track.durationMs ?? 0)
+          }
+          volume={volume}
+          onPlay={() =>
+            stream ? setStreamPlaying(true) : ipc.play().catch((e) => showStatus(`${e}`))
+          }
+          onPause={() =>
+            stream ? setStreamPlaying(false) : ipc.pause().catch((e) => showStatus(`${e}`))
+          }
+          onSeek={(ms) =>
+            stream ? setStreamSeek(ms) : ipc.seek(ms).catch((e) => showStatus(`${e}`))
+          }
+          onVolume={handleVolume}
+          onPrev={() => playPrev(nowRef.current.id)}
+          onNext={() => playNext(nowRef.current.id)}
+          onExit={() => toggleMini(false)}
+          canStep={!lineIn && (stream != null || now != null)}
+          coverRef={miniCoverRef}
+        />
+      )}
+
+      {mini && theaterVideo && miniRect && (
+        <button
+          className="mini-video-toggle"
+          title={miniVideo ? "Show cover" : "Show video"}
+          style={{
+            top: miniRect.top + miniRect.height - 38,
+            left: miniRect.left + miniRect.width - 38,
+          }}
+          onClick={() => setMiniVideo((v) => !v)}
+        >
+          {miniVideo ? <ImageIcon size={15} /> : <Film size={15} />}
+        </button>
+      )}
 
       {settingsOpen && (
         <SettingsPanel

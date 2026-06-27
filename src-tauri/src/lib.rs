@@ -48,7 +48,7 @@ pub fn run() {
             tauri::WebviewWindowBuilder::new(app, "main", url)
                 .title("MUSICPAX")
                 .inner_size(1280.0, 800.0)
-                .min_inner_size(960.0, 600.0)
+                .min_inner_size(1080.0, 720.0)
                 .build()?;
             Ok(())
         })
@@ -75,6 +75,7 @@ pub fn run() {
             commands::set_riaa,
             commands::set_tone,
             commands::set_input_gain,
+            commands::set_mini_window,
             commands::engine_status,
             commands::start_recording,
             commands::stop_recording,

@@ -379,6 +379,33 @@ pub fn set_input_gain(db: f32, state: State<'_, AppState>) -> EngineStatus {
     state.engine.status()
 }
 
+/// Toggle the compact "mini player" window: a small, fixed-size, floating,
+/// always-on-top card vs. the full app. In mini the window is locked
+/// (non-resizable) — only the in-app expand button restores the full size.
+#[tauri::command]
+pub fn set_mini_window(mini: bool, app: AppHandle) -> AppResult<()> {
+    use tauri::{LogicalSize, Size};
+    let win = app
+        .get_webview_window("main")
+        .ok_or_else(|| AppError::Other("main window not found".into()))?;
+    let map = |r: Result<(), tauri::Error>| r.map_err(|e| AppError::Other(e.to_string()));
+
+    if mini {
+        // Lower the floor, shrink to the mini size, then lock it.
+        map(win.set_min_size(Some(Size::Logical(LogicalSize::new(360.0, 600.0)))))?;
+        map(win.set_size(Size::Logical(LogicalSize::new(360.0, 600.0))))?;
+        map(win.set_resizable(false))?;
+        let _ = win.set_always_on_top(true);
+    } else {
+        // Re-enable resizing before restoring the full size + floor.
+        map(win.set_resizable(true))?;
+        map(win.set_min_size(Some(Size::Logical(LogicalSize::new(1080.0, 720.0)))))?;
+        map(win.set_size(Size::Logical(LogicalSize::new(1280.0, 800.0))))?;
+        let _ = win.set_always_on_top(false);
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn engine_status(state: State<'_, AppState>) -> EngineStatus {
     state.engine.status()

@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import {
   Disc3,
   Flag,
+  LayoutGrid,
   Link as LinkIcon,
+  List,
   Music,
   Pencil,
   RadioTower,
@@ -10,6 +12,7 @@ import {
   Square,
   SquarePlay,
 } from "lucide-react";
+import MpxLogo from "./MpxLogo";
 import { MEDIA_TYPES, mediaTypeMeta } from "../lib/mediaTypes";
 import type { MediaType, PlaylistInfo, SortField, SortSpec, Track } from "../lib/types";
 
@@ -34,6 +37,8 @@ interface Props {
   onMediaType?: (t: MediaType | null) => void;
   /// Curator inline-rename of the heading (e.g. a playlist title). Shows a pencil.
   onRenameHeading?: (name: string) => void;
+  /// Click an artist name to filter the library to that artist (all sources).
+  onArtist?: (artist: string) => void;
 }
 
 /// Icon per capability, refined by source (YouTube streams get the YouTube
@@ -125,6 +130,33 @@ export function formatDuration(ms: number | null): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
+const VIEW_KEY = "library.view";
+type ViewMode = "list" | "grid";
+
+/// A web-loadable cover for the grid: a remote/data art URL or a YouTube
+/// thumbnail. Local-file art isn't served over localhost, so it falls back to
+/// the MusicPax mark.
+function gridCoverUrl(t: Track): string | null {
+  if (t.artPath && /^(https?:|data:)/.test(t.artPath)) return t.artPath;
+  const m = t.uri.match(/[?&]v=([A-Za-z0-9_-]{11})/);
+  return m ? `https://i.ytimg.com/vi/${m[1]}/hqdefault.jpg` : null;
+}
+
+function GridCover({ track }: { track: Track }) {
+  const [failed, setFailed] = useState(false);
+  const url = gridCoverUrl(track);
+  if (!url || failed) return <MpxLogo className="grid-cover-logo" />;
+  return (
+    <img
+      className="grid-cover-img"
+      src={url}
+      alt=""
+      loading="lazy"
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
 export default function LibraryTable(props: Props) {
   const {
     tracks,
@@ -145,6 +177,7 @@ export default function LibraryTable(props: Props) {
     mediaType,
     onMediaType,
     onRenameHeading,
+    onArtist,
   } = props;
 
   const [editingHeading, setEditingHeading] = useState(false);
@@ -182,6 +215,14 @@ export default function LibraryTable(props: Props) {
       localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]));
       return next;
     });
+  };
+
+  const [viewMode, setViewMode] = useState<ViewMode>(() =>
+    localStorage.getItem(VIEW_KEY) === "grid" ? "grid" : "list",
+  );
+  const setView = (v: ViewMode) => {
+    setViewMode(v);
+    localStorage.setItem(VIEW_KEY, v);
   };
 
   const toggleSort = (field: SortField) => {
@@ -247,6 +288,22 @@ export default function LibraryTable(props: Props) {
             onChange={(e) => onQueryChange(e.target.value)}
           />
         )}
+        <div className="view-toggle" role="group" aria-label="View mode">
+          <button
+            className={viewMode === "list" ? "active" : ""}
+            title="List view"
+            onClick={() => setView("list")}
+          >
+            <List size={16} />
+          </button>
+          <button
+            className={viewMode === "grid" ? "active" : ""}
+            title="Grid view"
+            onClick={() => setView("grid")}
+          >
+            <LayoutGrid size={16} />
+          </button>
+        </div>
         <span className="track-count">
           {tracks.length} track{tracks.length === 1 ? "" : "s"}
         </span>
@@ -272,6 +329,44 @@ export default function LibraryTable(props: Props) {
         )}
       </div>
       <div className="library-scroll">
+        {viewMode === "grid" ? (
+          tracks.length === 0 ? (
+            <div className="grid-empty">
+              {heading
+                ? "This playlist is empty — add tracks with the + button."
+                : "Library is empty — use “Import Folder” or “Add URL” to add music."}
+            </div>
+          ) : (
+            <div className="library-grid">
+              {tracks.map((t) => (
+                <div
+                  key={t.id}
+                  className={`grid-card${t.id === nowPlayingId ? " playing" : ""}`}
+                  title={`${t.title ?? "Untitled"}${t.artist ? ` — ${t.artist}` : ""}`}
+                  onClick={() => onActivate(t)}
+                >
+                  <div className="grid-cover">
+                    <GridCover track={t} />
+                    {curator && (
+                      <button
+                        className="grid-edit"
+                        title="Edit title & tags"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onEdit(t);
+                        }}
+                      >
+                        <Pencil size={13} />
+                      </button>
+                    )}
+                  </div>
+                  <div className="grid-title">{t.title ?? "Untitled"}</div>
+                  <div className="grid-artist">{t.artist ?? "—"}</div>
+                </div>
+              ))}
+            </div>
+          )
+        ) : (
         <table className="library-table">
           <thead>
             <tr>
@@ -350,9 +445,26 @@ export default function LibraryTable(props: Props) {
                       const cls = [c.num ? "num" : "", isCollapsed ? "col-collapsed" : ""]
                         .filter(Boolean)
                         .join(" ");
+                      const clickableArtist =
+                        c.field === "artist" && onArtist && t.artist;
                       return (
                         <td key={c.field} className={cls || undefined}>
-                          {isCollapsed ? "" : c.cell(t)}
+                          {isCollapsed ? (
+                            ""
+                          ) : clickableArtist ? (
+                            <button
+                              className="artist-link"
+                              title={`Show all by ${t.artist}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onArtist!(t.artist!);
+                              }}
+                            >
+                              {t.artist}
+                            </button>
+                          ) : (
+                            c.cell(t)
+                          )}
                         </td>
                       );
                     })}
@@ -409,6 +521,7 @@ export default function LibraryTable(props: Props) {
             )}
           </tbody>
         </table>
+        )}
       </div>
     </section>
   );

@@ -15,7 +15,13 @@ interface Props {
   /// When set, the player fills this measured rect (theater / in-app fullscreen)
   /// instead of the small floating box. The iframe is never remounted, so
   /// playback is uninterrupted.
-  theaterRect?: { top: number; left: number; width: number; height: number } | null;
+  theaterRect?: {
+    top: number;
+    left: number;
+    width: number;
+    height: number;
+    z?: number;
+  } | null;
 }
 
 function videoIdFrom(uri: string): string | null {
@@ -153,6 +159,7 @@ export default function StreamPlayer(props: Props) {
         height: theater.height,
         right: "auto" as const,
         bottom: "auto" as const,
+        zIndex: theater.z,
       }
     : undefined;
 

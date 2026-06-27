@@ -156,6 +156,11 @@ export function setInputGain(db: number): Promise<EngineStatus> {
   return invoke<EngineStatus>("set_input_gain", { db });
 }
 
+/// Shrink the window into the floating, always-on-top mini player, or restore.
+export function setMiniWindow(mini: boolean): Promise<void> {
+  return invoke<void>("set_mini_window", { mini });
+}
+
 export function engineStatus(): Promise<EngineStatus> {
   return invoke<EngineStatus>("engine_status");
 }
