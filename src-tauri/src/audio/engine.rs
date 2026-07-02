@@ -99,6 +99,11 @@ pub struct Shared {
     // lock-free.
     pub broadcasting: AtomicBool,
     pub bcast_cons: Mutex<Option<Consumer<f32>>>,
+    // Visualizer tap: when `viz_active`, the callback pushes the post-volume mono
+    // mix into `viz_cons`; the meter thread drains it, computes a spectrum and
+    // emits it so OWNED audio (which never reaches the webview) can be visualized.
+    pub viz_active: AtomicBool,
+    pub viz_cons: Mutex<Option<Consumer<f32>>>,
 }
 
 impl Shared {
@@ -126,6 +131,8 @@ impl Shared {
             in_gain_bits: AtomicU32::new(1.0f32.to_bits()),
             broadcasting: AtomicBool::new(false),
             bcast_cons: Mutex::new(None),
+            viz_active: AtomicBool::new(false),
+            viz_cons: Mutex::new(None),
         }
     }
 
@@ -327,6 +334,12 @@ impl EngineHandle {
     pub fn set_input_gain(&self, db: f32) {
         let lin = 10f32.powf(db.clamp(0.0, 40.0) / 20.0);
         self.shared.in_gain_bits.store(lin.to_bits(), Ordering::Relaxed);
+    }
+
+    /// Toggle the visualizer audio tap; when on, the meter thread emits a
+    /// real per-band spectrum of the output mix for OWNED/line-in audio.
+    pub fn set_visualizer(&self, active: bool) {
+        self.shared.viz_active.store(active, Ordering::Relaxed);
     }
 
     pub fn start_recording(&self, path: std::path::PathBuf, format: RecordFormat) -> AppResult<()> {
@@ -934,6 +947,9 @@ fn build_stream_for<T: SizedSample + FromSample<f32>>(
     // ~4s of stereo headroom so a momentarily-stalled socket doesn't glitch.
     let (mut bcast_prod, bcast_cons) = RingBuffer::<f32>::new(config.sample_rate.0 as usize * 8);
     *lock_unpoisoned(&shared.bcast_cons) = Some(bcast_cons);
+    // Visualizer tap (mono): ~0.5 s of headroom; drained by the meter thread.
+    let (mut viz_prod, viz_cons) = RingBuffer::<f32>::new(config.sample_rate.0 as usize / 2);
+    *lock_unpoisoned(&shared.viz_cons) = Some(viz_cons);
 
     let stream = device
         .build_output_stream(
@@ -943,6 +959,7 @@ fn build_stream_for<T: SizedSample + FromSample<f32>>(
                 let volume = f32::from_bits(shared.volume_bits.load(Ordering::Relaxed));
                 let decode_done = shared.decode_done.load(Ordering::Acquire);
                 let broadcasting = shared.broadcasting.load(Ordering::Relaxed);
+                let viz_active = shared.viz_active.load(Ordering::Relaxed);
                 let frames = data.len() / channels;
                 let mut consumed: u64 = 0;
                 let (mut peak_l, mut peak_r) = (0.0f32, 0.0f32);
@@ -961,6 +978,10 @@ fn build_stream_for<T: SizedSample + FromSample<f32>>(
                     if broadcasting {
                         let _ = bcast_prod.push(l);
                         let _ = bcast_prod.push(r);
+                    }
+                    // Tee a mono copy to the visualizer when it's open.
+                    if viz_active {
+                        let _ = viz_prod.push((l + r) * 0.5);
                     }
                     peak_l = peak_l.max(l.abs());
                     peak_r = peak_r.max(r.abs());

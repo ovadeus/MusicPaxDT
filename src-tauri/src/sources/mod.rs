@@ -1,6 +1,7 @@
 pub mod local;
 pub mod mpx;
 pub mod musicbrainz;
+pub mod musicpax_feed;
 pub mod wikipedia;
 pub mod radio;
 pub mod spotify;

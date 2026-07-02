@@ -4,4 +4,6 @@ pub mod engine;
 pub mod input;
 pub mod meters;
 pub mod riaa;
+pub mod screen_audio;
 pub mod sinks;
+pub mod viz_capture;

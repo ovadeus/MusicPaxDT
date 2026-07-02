@@ -158,6 +158,9 @@ pub async fn read_image_data_url(path: String) -> AppResult<String> {
 /// Edit a track's title/artist/album/year/genre. Updates the library row and,
 /// for OWNED local files, writes the tags back to the file (best-effort, so a
 /// read-only or unsupported file still updates the library).
+// Args are the IPC params (one per editable field); a struct would change the
+// command contract, so the count is intentional.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn update_track_metadata(
     track_id: i64,
@@ -377,6 +380,90 @@ pub fn set_tone(bass_db: f32, treble_db: f32, state: State<'_, AppState>) -> Eng
 pub fn set_input_gain(db: f32, state: State<'_, AppState>) -> EngineStatus {
     state.engine.set_input_gain(db);
     state.engine.status()
+}
+
+/// Turn the visualizer audio tap on/off (the meter thread emits `audio-spectrum`
+/// while on, so OWNED/line-in audio can be visualized).
+#[tauri::command]
+pub fn set_visualizer(active: bool, state: State<'_, AppState>) {
+    state.engine.set_visualizer(active);
+}
+
+/// Capture a system-audio loopback device (e.g. BlackHole) for the visualizer —
+/// emits `audio-spectrum` so YouTube and anything else on the machine can be
+/// visualized. No monitor/playback, so there's no echo.
+#[tauri::command]
+pub fn start_viz_capture(device: Option<String>, app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
+    let capture = crate::audio::viz_capture::start(device, app).map_err(AppError::Other)?;
+    // Dropping the previous session (if any) stops + joins its thread.
+    *lock_unpoisoned(&state.viz_capture) = Some(capture);
+    Ok(())
+}
+
+/// Stop any active visualizer system-audio capture.
+#[tauri::command]
+pub fn stop_viz_capture(state: State<'_, AppState>) {
+    *lock_unpoisoned(&state.viz_capture) = None;
+}
+
+/// Ids of local-file tracks whose file is no longer on disk (moved/ejected) —
+/// the library flags these so the user can relink them.
+#[tauri::command]
+pub async fn check_missing_files(state: State<'_, AppState>) -> AppResult<Vec<i64>> {
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = lock_unpoisoned(&db);
+        let locals = db::local_track_uris(&conn)?;
+        Ok(locals
+            .into_iter()
+            .filter(|(_, uri)| !std::path::Path::new(uri).exists())
+            .map(|(id, _)| id)
+            .collect())
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("missing-file scan failed: {e}")))?
+}
+
+/// Repoint a track to a relocated file the user picked.
+#[tauri::command]
+pub async fn relink_track(
+    track_id: i64,
+    new_path: String,
+    state: State<'_, AppState>,
+) -> AppResult<Track> {
+    if !std::path::Path::new(&new_path).exists() {
+        return Err(AppError::Other("that file doesn't exist".into()));
+    }
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = lock_unpoisoned(&db);
+        db::set_track_uri(&conn, track_id, &new_path).map_err(|e| {
+            // A UNIQUE(uri) clash means another library row already points there.
+            if e.to_string().contains("UNIQUE") {
+                AppError::Other("that file is already in your library".into())
+            } else {
+                e
+            }
+        })
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("relink task failed: {e}")))?
+}
+
+/// Start no-install system-audio capture via ScreenCaptureKit (macOS 13+) so the
+/// visualizer can show YouTube without a virtual driver. Surfaces the
+/// permission error if Screen Recording isn't granted.
+#[tauri::command]
+pub fn start_screen_audio(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
+    let capture = crate::audio::screen_audio::start(app).map_err(AppError::Other)?;
+    *lock_unpoisoned(&state.screen_audio) = Some(capture);
+    Ok(())
+}
+
+/// Stop any active ScreenCaptureKit system-audio capture.
+#[tauri::command]
+pub fn stop_screen_audio(state: State<'_, AppState>) {
+    *lock_unpoisoned(&state.screen_audio) = None;
 }
 
 /// Toggle the compact "mini player" window: a small, fixed-size, floating,

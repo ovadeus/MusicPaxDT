@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  Bot,
   ChevronDown,
   FileMusic,
   FolderPlus,
@@ -27,6 +28,9 @@ interface Props {
   onSearchYouTube: () => void;
   onClean: () => void;
   onEnrich: () => void;
+  /// Shown only when an AI provider (key or Ollama) is configured.
+  aiAvailable?: boolean;
+  onAiAssistant?: () => void;
   onGoLive: () => void;
 }
 
@@ -97,6 +101,9 @@ export default function ManageMusicMenu(props: Props) {
           <div className="mode-sep" />
           {item("Clean Data", Wand2, props.onClean, enrichDisabled)}
           {item("Enrich", Sparkles, props.onEnrich, enrichDisabled)}
+          {props.aiAvailable &&
+            props.onAiAssistant &&
+            item("AI Assistant", Bot, props.onAiAssistant, props.busy ? { disabled: true } : undefined)}
           <div className="mode-sep" />
           {item("Go Live", RadioTower, props.onGoLive)}
         </div>

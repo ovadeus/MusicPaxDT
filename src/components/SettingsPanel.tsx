@@ -48,6 +48,9 @@ export default function SettingsPanel({ onClose, onError, onSaved }: Props) {
   const [spotifySecret, setSpotifySecret] = useState("");
   const [acoustidKey, setAcoustidKey] = useState("");
   const [aiKey, setAiKey] = useState("");
+  const [ollamaList, setOllamaList] = useState<string[]>([]);
+  const [detecting, setDetecting] = useState(false);
+  const [detectErr, setDetectErr] = useState<string | null>(null);
 
   const refreshEnrich = () =>
     ipc.enrichIntegrationStatus().then(setEnrich).catch(() => {});
@@ -71,6 +74,25 @@ export default function SettingsPanel({ onClose, onError, onSaved }: Props) {
       await refreshEnrich();
     } catch (e) {
       onError(`${e}`);
+    }
+  };
+
+  const detectOllama = async () => {
+    setDetecting(true);
+    setDetectErr(null);
+    try {
+      const list = await ipc.ollamaModels(values["enrich.ollama_host"] ?? "http://localhost:11434");
+      setOllamaList(list);
+      if (list.length === 0) {
+        setDetectErr("Ollama is running but has no models. Pull one, e.g. `ollama pull llama3`.");
+      } else if (!(values["enrich.model.ollama"] ?? "").trim()) {
+        await update("enrich.model.ollama", list[0]);
+      }
+    } catch (e) {
+      setDetectErr(`${e}`);
+      setOllamaList([]);
+    } finally {
+      setDetecting(false);
     }
   };
 
@@ -121,7 +143,9 @@ export default function SettingsPanel({ onClose, onError, onSaved }: Props) {
   const mp3Bitrate = values["recording.mp3_bitrate"] ?? "320";
 
   const aiProvider = values["enrich.ai_provider"] ?? "none";
-  const aiModel = values["enrich.ai_model"] ?? "";
+  // Model is stored per provider so an Ollama model can't leak into Anthropic.
+  const modelKey = `enrich.model.${aiProvider}`;
+  const aiModel = values[modelKey] ?? "";
   const spendCap = values["enrich.spend_cap_usd"] ?? "1.0";
   const ollamaHost = values["enrich.ollama_host"] ?? "http://localhost:11434";
   const aiKeyConfigured =
@@ -320,20 +344,15 @@ export default function SettingsPanel({ onClose, onError, onSaved }: Props) {
                 </select>
               </label>
 
-              {aiProvider !== "none" && (
+              {(aiProvider === "anthropic" || aiProvider === "openai") && (
                 <label className="settings-field">
                   <span>Model</span>
                   <input
+                    key={modelKey}
                     type="text"
-                    placeholder={
-                      aiProvider === "anthropic"
-                        ? "claude-opus-4-8"
-                        : aiProvider === "openai"
-                          ? "gpt-4o-mini"
-                          : "llama3"
-                    }
+                    placeholder={aiProvider === "anthropic" ? "claude-opus-4-8" : "gpt-4o-mini"}
                     defaultValue={aiModel}
-                    onBlur={(e) => update("enrich.ai_model", e.target.value)}
+                    onBlur={(e) => update(modelKey, e.target.value)}
                   />
                 </label>
               )}
@@ -361,14 +380,66 @@ export default function SettingsPanel({ onClose, onError, onSaved }: Props) {
               )}
 
               {aiProvider === "ollama" && (
-                <label className="settings-field">
-                  <span>Ollama host</span>
-                  <input
-                    type="text"
-                    defaultValue={ollamaHost}
-                    onBlur={(e) => update("enrich.ollama_host", e.target.value)}
-                  />
-                </label>
+                <>
+                  <label className="settings-field">
+                    <span>Ollama host</span>
+                    <input
+                      type="text"
+                      defaultValue={ollamaHost}
+                      onBlur={(e) => update("enrich.ollama_host", e.target.value)}
+                    />
+                  </label>
+
+                  <div className="integration-row">
+                    <span>
+                      Local model{" "}
+                      <em className={aiModel ? "ok" : ""}>{aiModel || "not set"}</em>
+                    </span>
+                    <div className="integration-inputs">
+                      {ollamaList.length > 0 ? (
+                        <select
+                          value={aiModel}
+                          onChange={(e) => update("enrich.model.ollama", e.target.value)}
+                        >
+                          <option value="" disabled>
+                            Pick a model…
+                          </option>
+                          {ollamaList.map((m) => (
+                            <option key={m} value={m}>
+                              {m}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          type="text"
+                          placeholder="llama3"
+                          defaultValue={aiModel}
+                          onBlur={(e) => update("enrich.model.ollama", e.target.value)}
+                        />
+                      )}
+                      <button onClick={detectOllama} disabled={detecting}>
+                        {detecting ? "Detecting…" : "Detect models"}
+                      </button>
+                    </div>
+                  </div>
+
+                  {detectErr && (
+                    <p className="settings-hint" style={{ color: "var(--danger)" }}>
+                      {detectErr}
+                    </p>
+                  )}
+
+                  <p className="settings-hint">
+                    The list shows the models you've pulled in Ollama. Use a general{" "}
+                    <strong>chat</strong> model — e.g. <code>llama3.2</code>, <code>mistral</code>,
+                    or <code>qwen2.5</code>. Embedding models (<code>nomic-embed-text</code>) can't
+                    generate text, and vision models (<code>llava</code>, <code>moondream</code>) do
+                    poorly at edits. Install one in a terminal, then Detect again:
+                    <br />
+                    <code>ollama pull llama3.2</code>
+                  </p>
+                </>
               )}
 
               {aiProvider !== "none" && aiProvider !== "ollama" && (

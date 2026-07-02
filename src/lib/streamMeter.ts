@@ -110,3 +110,39 @@ export function getLevels(): VuLevels | null {
 export function isLive(): boolean {
   return analyserL != null;
 }
+
+/// The shared AudioContext + media source, so the visualizer (audioMotion) can
+/// tap the *real* stream audio without a second createMediaElementSource (which
+/// would throw — it can run only once per element).
+export function getCtx(): AudioContext | null {
+  return ctx;
+}
+
+export function getSource(): MediaElementAudioSourceNode | null {
+  return source;
+}
+
+let freqBuf: Uint8Array | null = null;
+
+/// Log-spaced frequency bands (0..1) for the visualizer, or null when no live
+/// Web Audio graph is connected (engine/OWNED audio isn't in the webview, so
+/// the caller falls back to the VU level there).
+export function getBands(n: number): number[] | null {
+  if (!analyserL) return null;
+  const bins = analyserL.frequencyBinCount;
+  if (!freqBuf || freqBuf.length !== bins) freqBuf = new Uint8Array(bins);
+  analyserL.getByteFrequencyData(freqBuf);
+  const out = new Array<number>(n);
+  for (let i = 0; i < n; i++) {
+    const lo = Math.floor(bins ** (i / n));
+    const hi = Math.max(lo + 1, Math.floor(bins ** ((i + 1) / n)));
+    let sum = 0;
+    let c = 0;
+    for (let j = lo; j < hi && j < bins; j++) {
+      sum += freqBuf[j];
+      c++;
+    }
+    out[i] = c ? sum / c / 255 : 0;
+  }
+  return out;
+}

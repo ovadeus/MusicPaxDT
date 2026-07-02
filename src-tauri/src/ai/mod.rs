@@ -93,14 +93,32 @@ impl LlmProvider {
         raw_artist: Option<&str>,
     ) -> Result<CleanedTags, String> {
         let prompt = build_prompt(raw_title, raw_artist);
-        let text = match self {
-            LlmProvider::Anthropic { api_key, model } => {
-                anthropic_call(api_key, model, &prompt).await?
-            }
-            LlmProvider::OpenAi { api_key, model } => openai_call(api_key, model, &prompt).await?,
-            LlmProvider::Ollama { host, model } => ollama_call(host, model, &prompt).await?,
-        };
+        let text = self.complete_raw(SYSTEM, &prompt, 512).await?;
         parse_json_object(&text)
+    }
+
+    /// Dispatch one completion to the configured provider.
+    async fn complete_raw(
+        &self,
+        system: &str,
+        prompt: &str,
+        max_tokens: u32,
+    ) -> Result<String, String> {
+        match self {
+            LlmProvider::Anthropic { api_key, model } => {
+                anthropic_call(api_key, model, system, prompt, max_tokens).await
+            }
+            LlmProvider::OpenAi { api_key, model } => {
+                openai_call(api_key, model, system, prompt).await
+            }
+            LlmProvider::Ollama { host, model } => ollama_call(host, model, system, prompt).await,
+        }
+    }
+
+    /// General-purpose completion used by the AI Assistant — a larger output
+    /// budget than the cleanup path, since a bulk edit can return many rows.
+    pub async fn complete(&self, system: &str, prompt: &str) -> Result<String, String> {
+        self.complete_raw(system, prompt, 8192).await
     }
 }
 
@@ -122,7 +140,13 @@ fn anthropic_pricing(model: &str) -> (f64, f64) {
     }
 }
 
-async fn anthropic_call(api_key: &str, model: &str, prompt: &str) -> Result<String, String> {
+async fn anthropic_call(
+    api_key: &str,
+    model: &str,
+    system: &str,
+    prompt: &str,
+    max_tokens: u32,
+) -> Result<String, String> {
     #[derive(Deserialize)]
     struct Resp {
         content: Option<Vec<Block>>,
@@ -141,8 +165,8 @@ async fn anthropic_call(api_key: &str, model: &str, prompt: &str) -> Result<Stri
 
     let body = json!({
         "model": model,
-        "max_tokens": 512,
-        "system": SYSTEM,
+        "max_tokens": max_tokens,
+        "system": system,
         "messages": [{ "role": "user", "content": prompt }],
     });
     let resp = http()
@@ -180,7 +204,12 @@ fn openai_pricing(model: &str) -> (f64, f64) {
     }
 }
 
-async fn openai_call(api_key: &str, model: &str, prompt: &str) -> Result<String, String> {
+async fn openai_call(
+    api_key: &str,
+    model: &str,
+    system: &str,
+    prompt: &str,
+) -> Result<String, String> {
     #[derive(Deserialize)]
     struct Resp {
         choices: Option<Vec<Choice>>,
@@ -202,7 +231,7 @@ async fn openai_call(api_key: &str, model: &str, prompt: &str) -> Result<String,
     let body = json!({
         "model": model,
         "messages": [
-            { "role": "system", "content": SYSTEM },
+            { "role": "system", "content": system },
             { "role": "user", "content": prompt },
         ],
     });
@@ -231,7 +260,12 @@ async fn openai_call(api_key: &str, model: &str, prompt: &str) -> Result<String,
 
 // --- Ollama (local) --------------------------------------------------------
 
-async fn ollama_call(host: &str, model: &str, prompt: &str) -> Result<String, String> {
+async fn ollama_call(
+    host: &str,
+    model: &str,
+    system: &str,
+    prompt: &str,
+) -> Result<String, String> {
     #[derive(Deserialize)]
     struct Resp {
         response: Option<String>,
@@ -240,7 +274,7 @@ async fn ollama_call(host: &str, model: &str, prompt: &str) -> Result<String, St
     let host = host.trim_end_matches('/');
     let body = json!({
         "model": model,
-        "system": SYSTEM,
+        "system": system,
         "prompt": prompt,
         "stream": false,
         "format": "json",

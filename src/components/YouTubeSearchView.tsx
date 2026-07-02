@@ -35,6 +35,7 @@ export default function YouTubeSearchView({ onClose, onError, onInfo, onPlay }: 
   const [results, setResults] = useState<YtSearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
+  const [page, setPage] = useState(0);
   const [busyId, setBusyId] = useState<string | null>(null);
   // The global status banner sits behind this full-page overlay, so confirm
   // "Added" with a toast rendered inside the view.
@@ -53,6 +54,7 @@ export default function YouTubeSearchView({ onClose, onError, onInfo, onPlay }: 
     if (!q) return;
     setLoading(true);
     setSearched(true);
+    setPage(0);
     try {
       setResults(await ipc.youtubeSearch(q, sort));
     } catch (e) {
@@ -79,6 +81,17 @@ export default function YouTubeSearchView({ onClose, onError, onInfo, onPlay }: 
       setBusyId(null);
     }
   };
+
+  // Show 8 at a time; "Show More" rotates through the fetched pool (wrapping
+  // so each click yields a fresh set of 8).
+  const PAGE_SIZE = 8;
+  const visible =
+    results.length <= PAGE_SIZE
+      ? results
+      : Array.from(
+          { length: PAGE_SIZE },
+          (_, i) => results[(page * PAGE_SIZE + i) % results.length],
+        );
 
   return (
     <div className="yt-view">
@@ -148,7 +161,7 @@ export default function YouTubeSearchView({ onClose, onError, onInfo, onPlay }: 
       )}
 
       <div className="yt-grid">
-        {results.map((r) => (
+        {visible.map((r) => (
           <div className="yt-card" key={r.videoId}>
             <div
               className="yt-card-thumb"
@@ -208,6 +221,14 @@ export default function YouTubeSearchView({ onClose, onError, onInfo, onPlay }: 
           </div>
         ))}
       </div>
+
+      {!loading && results.length > PAGE_SIZE && (
+        <div className="yt-more">
+          <button className="yt-more-btn" onClick={() => setPage((p) => p + 1)}>
+            Show More
+          </button>
+        </div>
+      )}
     </div>
   );
 }

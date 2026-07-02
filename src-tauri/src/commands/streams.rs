@@ -47,6 +47,17 @@ pub fn set_youtube_api_key(key: String) -> AppResult<()> {
     keyring_set("youtube_api_key", key.trim()).map_err(AppError::Other)
 }
 
+/// One page of the MusicPax public feed (musicpax.com). Read-only metadata for
+/// the in-app "MusicPax Feed" view; infinite scroll drives `page`.
+#[tauri::command]
+pub async fn musicpax_feed(
+    page: u32,
+    limit: u32,
+    category: Option<String>,
+) -> AppResult<crate::sources::musicpax_feed::FeedPage> {
+    crate::sources::musicpax_feed::fetch(page, limit, category.as_deref()).await
+}
+
 #[tauri::command]
 pub fn set_spotify_credentials(client_id: String, client_secret: String) -> AppResult<()> {
     keyring_set("spotify_client_id", client_id.trim()).map_err(AppError::Other)?;
@@ -82,7 +93,7 @@ pub async fn youtube_search(
     }
     let order = youtube::SortOrder::parse(sort.as_deref());
     let candidates = match keyring_get("youtube_api_key") {
-        Some(key) => youtube::search(http(), &key, q, 12, order).await,
+        Some(key) => youtube::search(http(), &key, q, 40, order).await,
         None => youtube::search_keyless(http(), q, order).await,
     }
     .map_err(AppError::Other)?;
@@ -595,6 +606,18 @@ pub async fn playlist_tracks(
     })
     .await
     .map_err(|e| AppError::Other(format!("playlist task failed: {e}")))?
+}
+
+/// Persist a drag-and-drop playlist order (sidebar ids in display order).
+#[tauri::command]
+pub async fn reorder_playlists(ids: Vec<i64>, state: State<'_, AppState>) -> AppResult<()> {
+    let db_arc = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = lock_unpoisoned(&db_arc);
+        db::reorder_playlists(&conn, &ids)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("reorder task failed: {e}")))?
 }
 
 #[tauri::command]

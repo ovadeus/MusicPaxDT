@@ -80,6 +80,15 @@ fn migrate(conn: &Connection) -> AppResult<()> {
         )?;
         conn.pragma_update(None, "user_version", 3)?;
     }
+    if version < 4 {
+        // User-orderable playlists (drag to reorder). Seed positions from the
+        // existing id order so the sidebar looks unchanged until reordered.
+        conn.execute_batch(
+            "ALTER TABLE playlists ADD COLUMN position INTEGER NOT NULL DEFAULT 0;
+             UPDATE playlists SET position = id;",
+        )?;
+        conn.pragma_update(None, "user_version", 4)?;
+    }
     Ok(())
 }
 
@@ -353,6 +362,23 @@ pub fn set_track_art_path(conn: &Connection, id: i64, art_path: &str) -> AppResu
     Ok(())
 }
 
+/// (id, uri) for every local-file track — used to flag files that have moved.
+pub fn local_track_uris(conn: &Connection) -> AppResult<Vec<(i64, String)>> {
+    let mut stmt = conn.prepare("SELECT id, uri FROM tracks WHERE source_kind = 'local'")?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+/// Repoint a track to a new file path (relink a moved local file).
+pub fn set_track_uri(conn: &Connection, id: i64, uri: &str) -> AppResult<Track> {
+    conn.execute("UPDATE tracks SET uri = ?1 WHERE id = ?2", params![uri, id])?;
+    get_track(conn, id)
+}
+
 pub fn get_track_by_uri(conn: &Connection, uri: &str) -> AppResult<Option<Track>> {
     Ok(conn
         .query_row("SELECT * FROM tracks WHERE uri = ?1", [uri], track_from_row)
@@ -366,10 +392,22 @@ pub fn get_track_by_uri(conn: &Connection, uri: &str) -> AppResult<Option<Track>
 
 pub fn create_playlist(conn: &Connection, name: &str) -> AppResult<i64> {
     conn.execute(
-        "INSERT INTO playlists(name, type) VALUES (?1, 'manual')",
+        "INSERT INTO playlists(name, type, position)
+         VALUES (?1, 'manual', (SELECT COALESCE(MAX(position), -1) + 1 FROM playlists))",
         [name],
     )?;
     Ok(conn.last_insert_rowid())
+}
+
+/// Persist a new playlist order (the id list in display order → positions).
+pub fn reorder_playlists(conn: &Connection, ids: &[i64]) -> AppResult<()> {
+    for (i, id) in ids.iter().enumerate() {
+        conn.execute(
+            "UPDATE playlists SET position = ?1 WHERE id = ?2",
+            params![i as i64, id],
+        )?;
+    }
+    Ok(())
 }
 
 pub fn list_playlists(conn: &Connection) -> AppResult<Vec<crate::library::model::PlaylistInfo>> {
@@ -377,8 +415,8 @@ pub fn list_playlists(conn: &Connection) -> AppResult<Vec<crate::library::model:
         "SELECT p.id, p.name, COUNT(pi.track_id)
          FROM playlists p
          LEFT JOIN playlist_items pi ON pi.playlist_id = p.id
-         GROUP BY p.id, p.name
-         ORDER BY p.id",
+         GROUP BY p.id, p.name, p.position
+         ORDER BY p.position, p.id",
     )?;
     let rows = stmt.query_map([], |r| {
         Ok(crate::library::model::PlaylistInfo {
@@ -476,7 +514,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
         // FTS5 table exists and is queryable
         let count: i64 = conn
             .query_row("SELECT count(*) FROM tracks_fts", [], |r| r.get(0))

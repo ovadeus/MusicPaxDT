@@ -199,7 +199,7 @@ export default function NowPlayingPanel({
               My Liner Notes
             </button>
           </div>
-          <div className="np-media">
+          <div className="np-media" key={track.id}>
             {showVideo ? (
               <video
                 className="np-media-el"
@@ -226,6 +226,7 @@ export default function NowPlayingPanel({
           <div className="np-song-line">{track.title ?? "Untitled"}</div>
           {track.album && <div className="np-album-line">{track.album}</div>}
 
+          <div className="np-tab-content" key={`${tab}-${track.id}`}>
           {tab === "about" && curator && (
             <div className="np-loop-field">
               {editingLoop ? (
@@ -369,6 +370,7 @@ export default function NowPlayingPanel({
               )}
             </div>
           )}
+          </div>
         </div>
       )}
       {cheatOpen && <MarkdownCheatSheet onClose={() => setCheatOpen(false)} />}

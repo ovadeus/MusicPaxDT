@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  AlertCircle,
   Disc3,
   Flag,
   LayoutGrid,
@@ -39,6 +40,12 @@ interface Props {
   onRenameHeading?: (name: string) => void;
   /// Click an artist name to filter the library to that artist (all sources).
   onArtist?: (artist: string) => void;
+  /// Changes when the view (playlist) switches → fades the list in (300ms).
+  fadeKey?: string;
+  /// Local-file track ids whose file is missing (shows a relink indicator).
+  missingIds?: Set<number>;
+  /// Relink a missing local file (opens a file picker).
+  onRelink?: (track: Track) => void;
 }
 
 /// Icon per capability, refined by source (YouTube streams get the YouTube
@@ -178,6 +185,9 @@ export default function LibraryTable(props: Props) {
     onMediaType,
     onRenameHeading,
     onArtist,
+    fadeKey,
+    missingIds,
+    onRelink,
   } = props;
 
   const [editingHeading, setEditingHeading] = useState(false);
@@ -328,7 +338,7 @@ export default function LibraryTable(props: Props) {
           </div>
         )}
       </div>
-      <div className="library-scroll">
+      <div className="library-scroll" key={fadeKey}>
         {viewMode === "grid" ? (
           tracks.length === 0 ? (
             <div className="grid-empty">
@@ -421,13 +431,28 @@ export default function LibraryTable(props: Props) {
                 return (
                   <tr
                     key={t.id}
-                    className={t.id === nowPlayingId ? "playing" : ""}
+                    className={`${t.id === nowPlayingId ? "playing" : ""}${
+                      missingIds?.has(t.id) ? " missing" : ""
+                    }`}
                     onDoubleClick={() => onActivate(t)}
                   >
                     <td className="cap-col">
-                      <span className={`cap-icon ${cap.className}`} title={cap.label}>
-                        <cap.Icon size={15} />
-                      </span>
+                      {missingIds?.has(t.id) ? (
+                        <button
+                          className="cap-missing"
+                          title="Local file not found — click to relocate it"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onRelink?.(t);
+                          }}
+                        >
+                          <AlertCircle size={15} />
+                        </button>
+                      ) : (
+                        <span className={`cap-icon ${cap.className}`} title={cap.label}>
+                          <cap.Icon size={15} />
+                        </span>
+                      )}
                     </td>
                     {(() => {
                       const mt = mediaTypeMeta(t.mediaType);

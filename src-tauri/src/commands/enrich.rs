@@ -79,7 +79,11 @@ pub fn set_openai_key(key: String) -> AppResult<()> {
 /// + keychain. Returns None when the chosen provider has no credential.
 fn resolve_llm(conn: &rusqlite::Connection) -> AppResult<Option<LlmProvider>> {
     let provider = db::get_setting(conn, "enrich.ai_provider")?.unwrap_or_else(|| "none".into());
-    let model = db::get_setting(conn, "enrich.ai_model")?;
+    // Model is stored PER provider (`enrich.model.<provider>`) so an Ollama model
+    // can't leak into an Anthropic request. A blank model falls back to the
+    // default — an empty string 400s ("model: String should have at least 1 char").
+    let model = db::get_setting(conn, &format!("enrich.model.{provider}"))?
+        .filter(|m| !m.trim().is_empty());
     Ok(match provider.as_str() {
         "anthropic" => keyring_get("anthropic_api_key").map(|api_key| LlmProvider::Anthropic {
             api_key,
@@ -91,6 +95,7 @@ fn resolve_llm(conn: &rusqlite::Connection) -> AppResult<Option<LlmProvider>> {
         }),
         "ollama" => {
             let host = db::get_setting(conn, "enrich.ollama_host")?
+                .filter(|h| !h.trim().is_empty())
                 .unwrap_or_else(|| "http://localhost:11434".into());
             Some(LlmProvider::Ollama {
                 host,
@@ -478,4 +483,226 @@ pub async fn enrich_cost_estimate(
     })
     .await
     .map_err(|e| AppError::Other(format!("estimate task failed: {e}")))?
+}
+
+// --- AI Assistant: natural-language bulk edits -------------------------------
+
+const ASSISTANT_SYSTEM: &str = "You are MusicPax's music-library assistant. You \
+receive a JSON array of tracks (each: id, title, artist, album, year, genre) and \
+a user instruction describing a bulk metadata edit. Return ONLY a JSON array of \
+edits. Each edit is an object: {\"trackId\": <id>} plus ONLY the fields that \
+should change, chosen from \"title\", \"artist\", \"album\", \"genre\" (strings) \
+and \"year\" (integer). Include a track only if it needs a change, and include \
+only the changed fields. To clear a field set it to null. Do not invent data or \
+change anything the instruction did not ask for. Output JSON only — no prose, no \
+code fences.";
+
+/// One proposed field change, with the current and new value for review.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssistantChange {
+    pub track_id: i64,
+    pub field: String,
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub track_label: String,
+}
+
+/// Discover the models installed in a local Ollama (`GET {host}/api/tags`), so
+/// the user can pick one they actually have instead of guessing a name.
+#[tauri::command]
+pub async fn ollama_models(host: Option<String>) -> AppResult<Vec<String>> {
+    let host = host.unwrap_or_default();
+    let host = host.trim().trim_end_matches('/');
+    let host = if host.is_empty() {
+        "http://localhost:11434"
+    } else {
+        host
+    };
+
+    #[derive(serde::Deserialize)]
+    struct Tags {
+        models: Option<Vec<Model>>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Model {
+        name: String,
+    }
+
+    let resp = crate::net::http()
+        .get(format!("{host}/api/tags"))
+        .send()
+        .await
+        .map_err(|e| {
+            AppError::Other(format!(
+                "Ollama isn't reachable at {host} — is it running? ({e})"
+            ))
+        })?;
+    if !resp.status().is_success() {
+        return Err(AppError::Other(format!("Ollama returned {}", resp.status())));
+    }
+    let tags: Tags = resp
+        .json()
+        .await
+        .map_err(|e| AppError::Other(format!("Could not read Ollama models: {e}")))?;
+    Ok(tags
+        .models
+        .unwrap_or_default()
+        .into_iter()
+        .map(|m| m.name)
+        .collect())
+}
+
+/// The configured AI provider's label, or None when no provider is set up.
+/// Used to gate the AI Assistant menu entry.
+#[tauri::command]
+pub async fn ai_assistant_status(state: State<'_, AppState>) -> AppResult<Option<String>> {
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = lock_unpoisoned(&db);
+        Ok(resolve_llm(&conn)?.map(|p| p.label()))
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("status task failed: {e}")))?
+}
+
+/// Pull the first JSON array out of a model response (tolerates fences/prose).
+fn extract_json_array(text: &str) -> Result<Vec<serde_json::Value>, String> {
+    let start = text.find('[').ok_or("no JSON array in AI response")?;
+    let end = text.rfind(']').ok_or("unterminated JSON in AI response")?;
+    if end < start {
+        return Err("malformed JSON in AI response".into());
+    }
+    serde_json::from_str(&text[start..=end]).map_err(|e| format!("AI JSON parse failed: {e}"))
+}
+
+/// Trim + treat empty as absent, for change detection.
+fn norm(o: &Option<String>) -> Option<String> {
+    o.as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Run a natural-language instruction against the library and return the
+/// proposed per-field changes. Nothing is written — the UI reviews then applies
+/// via `apply_enrichment`.
+#[tauri::command]
+pub async fn ai_assistant_propose(
+    prompt: String,
+    state: State<'_, AppState>,
+) -> AppResult<Vec<AssistantChange>> {
+    let prompt = prompt.trim().to_string();
+    if prompt.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let db = state.db.clone();
+    let (provider, tracks) = tauri::async_runtime::spawn_blocking(
+        move || -> AppResult<(Option<LlmProvider>, Vec<Track>)> {
+            let conn = lock_unpoisoned(&db);
+            Ok((resolve_llm(&conn)?, db::list_tracks(&conn, None, None, None, 5000, 0)?))
+        },
+    )
+    .await
+    .map_err(|e| AppError::Other(format!("load task failed: {e}")))??;
+
+    let provider = provider.ok_or_else(|| {
+        AppError::Other(
+            "No AI provider configured — add an API key or Ollama in Settings → Integrations."
+                .into(),
+        )
+    })?;
+
+    const MAX_TRACKS: usize = 800;
+    let slim: Vec<_> = tracks
+        .iter()
+        .take(MAX_TRACKS)
+        .map(|t| {
+            serde_json::json!({
+                "id": t.id,
+                "title": t.title,
+                "artist": t.artist,
+                "album": t.album,
+                "year": t.year,
+                "genre": t.genre,
+            })
+        })
+        .collect();
+    let user_prompt = format!(
+        "Instruction: {prompt}\n\nTracks (JSON):\n{}",
+        serde_json::to_string(&slim).unwrap_or_default()
+    );
+
+    let text = provider
+        .complete(ASSISTANT_SYSTEM, &user_prompt)
+        .await
+        .map_err(AppError::Other)?;
+    let arr = extract_json_array(&text).map_err(AppError::Other)?;
+
+    let by_id: std::collections::HashMap<i64, &Track> =
+        tracks.iter().map(|t| (t.id, t)).collect();
+    let mut changes = Vec::new();
+
+    for edit in &arr {
+        let obj = match edit.as_object() {
+            Some(o) => o,
+            None => continue,
+        };
+        let track_id = match obj.get("trackId").and_then(|v| v.as_i64()) {
+            Some(id) => id,
+            None => continue,
+        };
+        let track = match by_id.get(&track_id) {
+            Some(t) => *t,
+            None => continue,
+        };
+        let label = format!(
+            "{} — {}",
+            track.artist.as_deref().unwrap_or("—"),
+            track.title.as_deref().unwrap_or("—")
+        );
+
+        for field in ["title", "artist", "album", "genre"] {
+            if let Some(v) = obj.get(field) {
+                if !v.is_null() && v.as_str().is_none() {
+                    continue; // not a string/null → ignore malformed
+                }
+                let to = if v.is_null() {
+                    None
+                } else {
+                    v.as_str().map(|s| s.trim().to_string())
+                };
+                let from = match field {
+                    "title" => track.title.clone(),
+                    "artist" => track.artist.clone(),
+                    "album" => track.album.clone(),
+                    _ => track.genre.clone(),
+                };
+                if norm(&from) != norm(&to) {
+                    changes.push(AssistantChange {
+                        track_id,
+                        field: field.to_string(),
+                        from,
+                        to,
+                        track_label: label.clone(),
+                    });
+                }
+            }
+        }
+
+        if let Some(v) = obj.get("year") {
+            let to = if v.is_null() { None } else { v.as_i64() };
+            if track.year != to {
+                changes.push(AssistantChange {
+                    track_id,
+                    field: "year".into(),
+                    from: track.year.map(|y| y.to_string()),
+                    to: to.map(|y| y.to_string()),
+                    track_label: label.clone(),
+                });
+            }
+        }
+    }
+
+    Ok(changes)
 }

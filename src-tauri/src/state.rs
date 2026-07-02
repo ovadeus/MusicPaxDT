@@ -4,6 +4,8 @@ use rusqlite::Connection;
 
 use crate::audio::broadcast::Broadcaster;
 use crate::audio::engine::EngineHandle;
+use crate::audio::screen_audio::ScreenAudio;
+use crate::audio::viz_capture::VizCapture;
 
 /// Lock a mutex, recovering from poisoning (a panicked holder) instead of
 /// propagating the panic — the DB/engine state stays usable.
@@ -16,4 +18,8 @@ pub struct AppState {
     pub engine: Arc<EngineHandle>,
     /// Live "Go Live" broadcaster (Icecast source client).
     pub broadcaster: Arc<Broadcaster>,
+    /// Active visualizer system-audio capture (e.g. a loopback device), if any.
+    pub viz_capture: Mutex<Option<VizCapture>>,
+    /// Active no-install ScreenCaptureKit system-audio capture, if any.
+    pub screen_audio: Mutex<Option<ScreenAudio>>,
 }

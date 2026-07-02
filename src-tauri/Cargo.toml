@@ -40,3 +40,8 @@ portpicker = "0.1.1"
 
 [dev-dependencies]
 tokio = { version = "1.52.3", features = ["rt", "macros"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# System-audio capture for the visualizer (so YouTube can be visualized with no
+# driver install). macos_13_0 enables audio capture.
+screencapturekit = { version = "8.0.0", features = ["macos_13_0"] }

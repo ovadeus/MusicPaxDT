@@ -271,12 +271,12 @@ pub async fn search_keyless(
     // Walk the response for videoRenderer objects, wherever they sit.
     let mut candidates = Vec::new();
     collect_video_renderers(&value, &mut candidates);
-    candidates.truncate(8);
+    candidates.truncate(40);
     Ok(candidates)
 }
 
 fn collect_video_renderers(value: &serde_json::Value, out: &mut Vec<Candidate>) {
-    if out.len() >= 12 {
+    if out.len() >= 40 {
         return;
     }
     match value {

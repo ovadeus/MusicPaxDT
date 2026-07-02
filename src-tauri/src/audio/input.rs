@@ -247,7 +247,7 @@ pub fn start_line_in(
     })
 }
 
-fn build_input_stream(
+pub fn build_input_stream(
     device: &Device,
     config: &cpal::SupportedStreamConfig,
     channels: usize,

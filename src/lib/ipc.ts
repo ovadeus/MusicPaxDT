@@ -46,6 +46,16 @@ export function listTracks(opts: {
   });
 }
 
+/// Ids of local-file tracks whose file is no longer on disk.
+export function checkMissingFiles(): Promise<number[]> {
+  return invoke<number[]>("check_missing_files");
+}
+
+/// Repoint a track to a relocated file.
+export function relinkTrack(trackId: number, newPath: string): Promise<Track> {
+  return invoke<Track>("relink_track", { trackId, newPath });
+}
+
 export function updateTrackMetadata(
   trackId: number,
   fields: {
@@ -156,9 +166,78 @@ export function setInputGain(db: number): Promise<EngineStatus> {
   return invoke<EngineStatus>("set_input_gain", { db });
 }
 
+/// MusicPax public feed (musicpax.com) — read-only metadata, infinite scroll.
+export interface FeedItem {
+  id: number;
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  year: string | null;
+  sourceType: string | null;
+  sourceUrl: string | null;
+  streamUrl: string | null;
+  thumbnail: string | null;
+  coverImage: string | null;
+  duration: number | null;
+  category: string | null;
+  dateAdded: string | null;
+  playCount: number | null;
+  username: string | null;
+}
+
+export interface FeedPage {
+  data: FeedItem[];
+  pagination: {
+    currentPage: number;
+    pageSize: number;
+    totalItems: number;
+    totalPages: number;
+    hasNextPage: boolean;
+    hasPreviousPage: boolean;
+  };
+}
+
+export function musicPaxFeed(
+  page: number,
+  limit: number,
+  category: string | null,
+): Promise<FeedPage> {
+  return invoke<FeedPage>("musicpax_feed", { page, limit, category: category ?? null });
+}
+
 /// Shrink the window into the floating, always-on-top mini player, or restore.
 export function setMiniWindow(mini: boolean): Promise<void> {
   return invoke<void>("set_mini_window", { mini });
+}
+
+/// Toggle the engine's visualizer audio tap (emits `audio-spectrum` while on).
+export function setVisualizer(active: boolean): Promise<void> {
+  return invoke<void>("set_visualizer", { active });
+}
+
+/// Real per-band spectrum of the engine output mix (OWNED / line-in audio).
+export function onAudioSpectrum(cb: (bands: number[]) => void): Promise<UnlistenFn> {
+  return listen<number[]>("audio-spectrum", (e) => cb(e.payload));
+}
+
+/// Capture a system-audio loopback input device for the visualizer (so YouTube
+/// and anything else on the machine can be visualized). Emits `audio-spectrum`.
+export function startVizCapture(device: string | null): Promise<void> {
+  return invoke<void>("start_viz_capture", { device: device ?? null });
+}
+
+export function stopVizCapture(): Promise<void> {
+  return invoke<void>("stop_viz_capture");
+}
+
+/// No-install system-audio capture via ScreenCaptureKit (macOS 13+). Rejects
+/// with a permission message if Screen Recording isn't granted.
+export function startScreenAudio(): Promise<void> {
+  return invoke<void>("start_screen_audio");
+}
+
+export function stopScreenAudio(): Promise<void> {
+  return invoke<void>("stop_screen_audio");
 }
 
 export function engineStatus(): Promise<EngineStatus> {
@@ -223,6 +302,31 @@ export function lookupTrackTags(
     title,
     artist,
   });
+}
+
+/// AI Assistant — natural-language bulk edits proposed by the configured LLM.
+export interface AssistantChange {
+  trackId: number;
+  field: "title" | "artist" | "album" | "year" | "genre";
+  from: string | null;
+  to: string | null;
+  trackLabel: string;
+}
+
+/// The configured AI provider's label, or null if none is set up.
+export function aiAssistantStatus(): Promise<string | null> {
+  return invoke<string | null>("ai_assistant_status");
+}
+
+/// Models installed in a local Ollama (GET {host}/api/tags).
+export function ollamaModels(host: string): Promise<string[]> {
+  return invoke<string[]>("ollama_models", { host });
+}
+
+/// Propose per-field edits for a natural-language instruction. Nothing is
+/// written; review then apply via applyEnrichment.
+export function aiAssistantPropose(prompt: string): Promise<AssistantChange[]> {
+  return invoke<AssistantChange[]>("ai_assistant_propose", { prompt });
 }
 
 export function applyEnrichment(edits: ApprovedEdit[]): Promise<number> {
@@ -323,6 +427,11 @@ export function deletePlaylist(playlistId: number): Promise<void> {
 
 export function renamePlaylist(playlistId: number, name: string): Promise<void> {
   return invoke<void>("rename_playlist", { playlistId, name });
+}
+
+/// Persist a drag-and-drop playlist order (ids in display order).
+export function reorderPlaylists(ids: number[]): Promise<void> {
+  return invoke<void>("reorder_playlists", { ids });
 }
 
 export interface MpxImportReport {

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
+  AudioLines,
   ChevronLeft,
   Film,
   Image as ImageIcon,
@@ -10,7 +11,11 @@ import {
   Settings as SettingsIcon,
 } from "lucide-react";
 import MpxLogo from "./components/MpxLogo";
+import AIAssistantModal from "./components/AIAssistantModal";
 import ManageMusicMenu from "./components/ManageMusicMenu";
+import Visualizer from "./components/Visualizer";
+import VizSettingsBoard from "./components/VizSettingsBoard";
+import { loadViz, saveViz, type VizSettings } from "./lib/vizSettings";
 import GoLivePanel from "./components/GoLivePanel";
 import AddUrlModal from "./components/AddUrlModal";
 import YouTubeSearchView from "./components/YouTubeSearchView";
@@ -25,6 +30,7 @@ import TrackEditModal from "./components/TrackEditModal";
 import LibraryTable from "./components/LibraryTable";
 import Logo from "./components/Logo";
 import MiniPlayer from "./components/MiniPlayer";
+import MusicPaxFeed from "./components/MusicPaxFeed";
 import NowPlayingBar from "./components/NowPlayingBar";
 import PlaylistSidebar, { type LibraryView } from "./components/PlaylistSidebar";
 import ReceiverPanel from "./components/ReceiverPanel";
@@ -115,6 +121,52 @@ export default function App() {
     return saved >= 160 && saved <= 480 ? saved : 200;
   });
   const [goLiveOpen, setGoLiveOpen] = useState(false);
+  // AI Assistant: provider label (null = not configured → menu entry hidden).
+  const [aiLabel, setAiLabel] = useState<string | null>(null);
+  const [aiAssistantOpen, setAiAssistantOpen] = useState(false);
+  const [visualizerOpen, setVisualizerOpen] = useState(false);
+  const [vizBoardOpen, setVizBoardOpen] = useState(false);
+  const [vizSettings, setVizSettings] = useState<VizSettings>(loadViz);
+  const setViz = useCallback((patch: Partial<VizSettings>) => {
+    setVizSettings((s) => {
+      const next = { ...s, ...patch };
+      saveViz(next);
+      return next;
+    });
+  }, []);
+  // System-audio capture for the visualizer (lets YouTube be visualized).
+  const [systemCapture, setSystemCapture] = useState(false);
+  // Feedback for the system-audio capture flow, shown inside the visualizer
+  // overlay (the status banner is hidden behind it).
+  const [vizCaptureMsg, setVizCaptureMsg] = useState<string | null>(null);
+  const closeVisualizer = useCallback(() => {
+    setVisualizerOpen(false);
+    setVizBoardOpen(false);
+    setSystemCapture(false);
+    setVizCaptureMsg(null);
+    ipc.stopVizCapture().catch(() => {});
+    ipc.stopScreenAudio().catch(() => {});
+  }, []);
+  useEffect(() => {
+    if (!visualizerOpen) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && closeVisualizer();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [visualizerOpen, closeVisualizer]);
+  useEffect(() => {
+    if (settingsOpen) return; // re-check whenever the Settings dialog closes
+    // Gate the AI Assistant menu on the configured provider (a DB setting), NOT
+    // on reading the API key. Reading the keychain on launch makes macOS prompt
+    // for the login password every start (the app isn't code-signed); the key is
+    // only read later, when the assistant actually runs.
+    ipc
+      .getSettings()
+      .then((s) => {
+        const p = s["enrich.ai_provider"];
+        setAiLabel(p && p !== "none" ? p : null);
+      })
+      .catch(() => setAiLabel(null));
+  }, [settingsOpen]);
   // Theater (in-app fullscreen) for the now-playing media.
   const [mini, setMini] = useState(false);
   const [miniVideo, setMiniVideo] = useState(false);
@@ -174,6 +226,54 @@ export default function App() {
     window.setTimeout(() => setStatus((cur) => (cur === msg ? null : cur)), 8000);
   }, []);
 
+  // Visualizer: capture a system-audio loopback so YouTube can be visualized.
+  const trySystemAudio = useCallback(async () => {
+    const HINTS = [
+      "blackhole",
+      "loopback",
+      "soundflower",
+      "vb-audio",
+      "vb-cable",
+      "voicemeeter",
+      "stereo mix",
+      "aggregate",
+      "multi-output",
+      "wave link",
+    ];
+    setVizCaptureMsg("Starting system-audio capture…");
+    // Preferred path: no-install ScreenCaptureKit (macOS 13+). The first run
+    // triggers the Screen-Recording permission prompt.
+    try {
+      await ipc.startScreenAudio();
+      setVizCaptureMsg(null);
+      setSystemCapture(true);
+      return;
+    } catch (screenErr) {
+      // Fall back to a loopback input device (BlackHole etc.) if one exists.
+      try {
+        const devices = await ipc.getAudioInputDevices();
+        const match = devices.find((d) => HINTS.some((h) => d.name.toLowerCase().includes(h)));
+        if (match) {
+          await ipc.startVizCapture(match.name);
+          setVizCaptureMsg(null);
+          setSystemCapture(true);
+          return;
+        }
+      } catch {
+        /* no loopback either — show the ScreenCaptureKit message below */
+      }
+      setVizCaptureMsg(`${screenErr}`);
+    }
+  }, []);
+  // Stop capture if playback moves away from YouTube while capturing.
+  useEffect(() => {
+    if (systemCapture && stream?.sourceKind !== "youtube") {
+      ipc.stopVizCapture().catch(() => {});
+      ipc.stopScreenAudio().catch(() => {});
+      setSystemCapture(false);
+    }
+  }, [stream, systemCapture]);
+
   const refreshPlaylists = useCallback(async () => {
     try {
       setPlaylists(await ipc.listPlaylists());
@@ -210,6 +310,41 @@ export default function App() {
       showStatus(`Failed to load library: ${e}`);
     }
   }, [view, query, sort, showStatus, source, mediaTypeFilter, artistFilter]);
+
+  // Local files that have moved/ejected — flagged in the table with a relink dot.
+  const [missingIds, setMissingIds] = useState<Set<number>>(new Set());
+  const refreshMissing = useCallback(() => {
+    ipc
+      .checkMissingFiles()
+      .then((ids) => setMissingIds(new Set(ids)))
+      .catch(() => {});
+  }, []);
+  useEffect(() => {
+    refreshMissing();
+  }, [refreshMissing]);
+  const relinkFile = useCallback(
+    async (track: Track) => {
+      try {
+        const picked = await open({
+          multiple: false,
+          filters: [
+            {
+              name: "Audio",
+              extensions: ["mp3", "flac", "wav", "aiff", "aif", "m4a", "aac", "ogg", "oga", "opus"],
+            },
+          ],
+        });
+        if (typeof picked !== "string") return;
+        await ipc.relinkTrack(track.id, picked);
+        showStatus(`Relinked “${track.title ?? "track"}”`);
+        refreshMissing();
+        refreshTracks();
+      } catch (e) {
+        showStatus(`${e}`);
+      }
+    },
+    [showStatus, refreshMissing, refreshTracks],
+  );
 
   // Debounced refresh on view/search/sort change.
   const debounce = useRef<number | undefined>(undefined);
@@ -363,11 +498,21 @@ export default function App() {
     [showStatus],
   );
 
-  /// Advance to the next track in the current view — across capabilities,
-  /// so mixed playlists flow from local files into streams and back.
+  // The active playback queue for MusicPax Feed items (synthesised tracks have
+  // negative ids and aren't in the library list, so next/prev advance through
+  // this instead). The feed keeps it fresh as it loads more pages.
+  const feedQueueRef = useRef<Track[]>([]);
+  const setFeedQueue = useCallback((q: Track[]) => {
+    feedQueueRef.current = q;
+  }, []);
+
+  /// Advance to the next track in the current context — across capabilities,
+  /// so mixed playlists flow from local files into streams and back. Feed items
+  /// (negative ids) advance through the feed queue.
   const playNext = useCallback(
     (afterTrackId: number | null) => {
-      const list = tracksRef.current;
+      const list =
+        afterTrackId != null && afterTrackId < 0 ? feedQueueRef.current : tracksRef.current;
       if (!list.length || afterTrackId == null) return;
       const idx = list.findIndex((t) => t.id === afterTrackId);
       if (idx >= 0 && idx + 1 < list.length) {
@@ -379,10 +524,11 @@ export default function App() {
     [playTrack],
   );
 
-  // Manual "previous track" — step back one in the current list.
+  // Manual "previous track" — step back one in the current context.
   const playPrev = useCallback(
     (beforeTrackId: number | null) => {
-      const list = tracksRef.current;
+      const list =
+        beforeTrackId != null && beforeTrackId < 0 ? feedQueueRef.current : tracksRef.current;
       if (!list.length || beforeTrackId == null) return;
       const idx = list.findIndex((t) => t.id === beforeTrackId);
       if (idx > 0) void playTrack(list[idx - 1]);
@@ -688,6 +834,8 @@ export default function App() {
                 onSearchYouTube={() => setYtSearchOpen(true)}
                 onClean={handleCleanAll}
                 onEnrich={handleEnrichAll}
+                aiAvailable={!!aiLabel}
+                onAiAssistant={() => setAiAssistantOpen(true)}
                 onGoLive={() => setGoLiveOpen(true)}
               />
             </>
@@ -698,6 +846,14 @@ export default function App() {
             title="Mini player"
           >
             <PictureInPicture2 size={16} />
+          </button>
+          <button
+            className={`settings-button${visualizerOpen ? " active" : ""}`}
+            onClick={() => (visualizerOpen ? closeVisualizer() : setVisualizerOpen(true))}
+            disabled={!visualizerOpen && !detailTrack}
+            title={visualizerOpen ? "Exit visualizer" : "Audio visualizer"}
+          >
+            <AudioLines size={16} />
           </button>
           <button
             className="settings-button"
@@ -842,6 +998,14 @@ export default function App() {
                 })
                 .catch((e) => showStatus(`${e}`));
             }}
+            onReorder={(ids) => {
+              // Optimistic reorder, then persist + reconcile.
+              setPlaylists((prev) => ids.flatMap((id) => prev.filter((p) => p.id === id)));
+              ipc
+                .reorderPlaylists(ids)
+                .then(refreshPlaylists)
+                .catch((e) => showStatus(`${e}`));
+            }}
           />
           <SidebarResizer
             width={sidebarWidth}
@@ -850,9 +1014,24 @@ export default function App() {
             onChange={setSidebarWidth}
             onCommit={(w) => localStorage.setItem("library.sidebarWidth", String(w))}
           />
+          {view.kind === "feed" ? (
+            <MusicPaxFeed
+              onPlay={playTrack}
+              onQueue={setFeedQueue}
+              onSaved={(title) => {
+                showStatus(`Saved “${title}” to the library`);
+                refreshTracks();
+              }}
+              playingUri={stream?.uri ?? null}
+              onError={showStatus}
+            />
+          ) : (
           <LibraryTable
             tracks={tracks}
             onArtist={filterByArtist}
+            fadeKey={
+              view.kind === "playlist" ? `p${view.id}` : `${view.kind}:${artistFilter ?? ""}`
+            }
             heading={artistFilter ?? (view.kind === "playlist" ? view.name : undefined)}
             onRenameHeading={
               view.kind === "playlist"
@@ -897,7 +1076,10 @@ export default function App() {
             }}
             mediaType={mediaTypeFilter}
             onMediaType={setMediaTypeFilter}
+            missingIds={missingIds}
+            onRelink={relinkFile}
           />
+          )}
         </div>
       )}
       </div>
@@ -1056,6 +1238,38 @@ export default function App() {
         >
           {miniVideo ? <ImageIcon size={15} /> : <Film size={15} />}
         </button>
+      )}
+
+      {visualizerOpen && (
+        <Visualizer
+          key={`${stream?.sourceKind ?? "engine"}-${systemCapture}`}
+          settings={vizSettings}
+          noAudio={stream?.sourceKind === "youtube"}
+          systemCapture={systemCapture}
+          onSystemAudio={trySystemAudio}
+          captureMsg={vizCaptureMsg}
+          boardOpen={vizBoardOpen}
+          onToggleBoard={() => setVizBoardOpen((o) => !o)}
+        />
+      )}
+      {visualizerOpen && vizBoardOpen && (
+        <VizSettingsBoard
+          settings={vizSettings}
+          onChange={setViz}
+          onClose={() => setVizBoardOpen(false)}
+        />
+      )}
+
+      {aiAssistantOpen && aiLabel && (
+        <AIAssistantModal
+          providerLabel={aiLabel}
+          onClose={() => setAiAssistantOpen(false)}
+          onApplied={(n) => {
+            showStatus(`Applied ${n} change${n === 1 ? "" : "s"}`);
+            refreshTracks();
+          }}
+          onError={showStatus}
+        />
       )}
 
       {settingsOpen && (
