@@ -329,7 +329,10 @@ fn relay_loop(
         match FftFixedIn::new(in_rate as usize, out_rate as usize, RESAMPLE_CHUNK, 2, 2) {
             Ok(r) => Some(r),
             Err(e) => {
-                eprintln!("line-in resampler init failed ({in_rate} → {out_rate}): {e}");
+                // Relay can't run — stop any active recording so it doesn't sit
+                // expecting data that will never arrive, and surface the reason.
+                eprintln!("line-in relay stopped: resampler init failed ({in_rate} → {out_rate}): {e}");
+                shared.recording.store(false, Ordering::Release);
                 return;
             }
         }
@@ -391,7 +394,8 @@ fn relay_loop(
                     match rs.process(&[in_l, in_r], None) {
                         Ok(out) => push_monitor(&mut output, &out[0], &out[1], &stop, &shared),
                         Err(e) => {
-                            eprintln!("line-in resample error: {e}");
+                            eprintln!("line-in relay stopped: resample error: {e}");
+                            shared.recording.store(false, Ordering::Release);
                             return;
                         }
                     }

@@ -448,6 +448,11 @@ export default function App() {
 
   const tracksRef = useRef(tracks);
   tracksRef.current = tracks;
+  // The play queue is snapshotted when a library track starts (see playTrack),
+  // so searching or switching views afterwards can't derail next/prev — which
+  // otherwise walked the live, now-different table. Feed items (negative ids)
+  // advance through feedQueueRef instead.
+  const queueRef = useRef<Track[]>([]);
   const nowRef = useRef<{ id: number | null; positionMs: number; durationMs: number }>({
     id: null,
     positionMs: 0,
@@ -461,6 +466,10 @@ export default function App() {
 
   const playTrack = useCallback(
     async (track: Track) => {
+      // Freeze the queue context at play time so a later search/filter can't
+      // change what next/prev advance through. Feed items (negative ids) keep
+      // using feedQueueRef, which the feed maintains as it loads pages.
+      if (track.id >= 0) queueRef.current = tracksRef.current;
       try {
         if (track.capability === "OWNED") {
           setStream(null);
@@ -512,7 +521,7 @@ export default function App() {
   const playNext = useCallback(
     (afterTrackId: number | null) => {
       const list =
-        afterTrackId != null && afterTrackId < 0 ? feedQueueRef.current : tracksRef.current;
+        afterTrackId != null && afterTrackId < 0 ? feedQueueRef.current : queueRef.current;
       if (!list.length || afterTrackId == null) return;
       const idx = list.findIndex((t) => t.id === afterTrackId);
       if (idx >= 0 && idx + 1 < list.length) {
@@ -528,7 +537,7 @@ export default function App() {
   const playPrev = useCallback(
     (beforeTrackId: number | null) => {
       const list =
-        beforeTrackId != null && beforeTrackId < 0 ? feedQueueRef.current : tracksRef.current;
+        beforeTrackId != null && beforeTrackId < 0 ? feedQueueRef.current : queueRef.current;
       if (!list.length || beforeTrackId == null) return;
       const idx = list.findIndex((t) => t.id === beforeTrackId);
       if (idx > 0) void playTrack(list[idx - 1]);

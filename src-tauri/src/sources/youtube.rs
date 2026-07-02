@@ -130,6 +130,9 @@ pub async fn search(
 ) -> Result<Vec<Candidate>, String> {
     #[derive(Deserialize)]
     struct SearchResp {
+        // Default so an API error body (which has no `items`) still deserializes
+        // and the `error` branch below fires instead of a misleading parse error.
+        #[serde(default)]
         items: Vec<SearchItem>,
         error: Option<serde_json::Value>,
     }
@@ -195,6 +198,9 @@ pub async fn search(
     // One videos.list call fills in durations for all candidates.
     #[derive(Deserialize)]
     struct VideosResp {
+        // Default so a failed durations call (e.g. quota) degrades to "no
+        // durations" rather than failing the whole search.
+        #[serde(default)]
         items: Vec<VideoItem>,
     }
     #[derive(Deserialize)]

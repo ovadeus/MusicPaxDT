@@ -119,9 +119,12 @@ pub async fn acoustid_lookup(
     fp: &Fingerprint,
 ) -> Result<Option<(String, f32)>, String> {
     let duration = (fp.duration_secs.round() as i64).to_string();
+    // POST the params as a form body (AcoustID supports it) rather than a URL
+    // query, so the API key never lands in the URL — and thus never leaks into
+    // reqwest's error Display or any log. `without_url()` redacts it defensively.
     let resp = http()
-        .get("https://api.acoustid.org/v2/lookup")
-        .query(&[
+        .post("https://api.acoustid.org/v2/lookup")
+        .form(&[
             ("client", api_key),
             ("meta", "recordingids"),
             ("duration", duration.as_str()),
@@ -129,11 +132,11 @@ pub async fn acoustid_lookup(
         ])
         .send()
         .await
-        .map_err(|e| format!("AcoustID request failed: {e}"))?;
+        .map_err(|e| format!("AcoustID request failed: {}", e.without_url()))?;
     let body: AcoustIdResponse = resp
         .json()
         .await
-        .map_err(|e| format!("AcoustID parse failed: {e}"))?;
+        .map_err(|e| format!("AcoustID parse failed: {}", e.without_url()))?;
     if body.status != "ok" {
         return Err(format!(
             "AcoustID error: {}",
@@ -164,7 +167,15 @@ pub async fn identify(
     audio: &Path,
     acoustid_key: &str,
 ) -> Result<Option<MetadataSuggestion>, String> {
-    let fp = compute(fpcalc, audio)?;
+    // fpcalc is a blocking subprocess — run it on the blocking pool so it never
+    // stalls the async runtime that drives the rest of enrichment.
+    let fp = {
+        let fpcalc = fpcalc.to_path_buf();
+        let audio = audio.to_path_buf();
+        tokio::task::spawn_blocking(move || compute(&fpcalc, &audio))
+            .await
+            .map_err(|e| format!("fpcalc task failed: {e}"))??
+    };
     let Some((mbid, score)) = acoustid_lookup(acoustid_key, &fp).await? else {
         return Ok(None);
     };

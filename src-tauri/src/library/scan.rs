@@ -144,7 +144,10 @@ pub fn import_folder(conn: &Connection, root: &Path) -> AppResult<ImportResult> 
     let mut tx = conn.unchecked_transaction()?;
     let mut in_chunk = 0usize;
 
-    for entry in WalkDir::new(root).follow_links(false) {
+    // Follow symlinks so a symlinked file or library folder is imported rather
+    // than silently skipped; walkdir detects symlink loops and reports them as
+    // errors, which the match arm below collects into result.errors.
+    for entry in WalkDir::new(root).follow_links(true) {
         let entry = match entry {
             Ok(e) => e,
             Err(e) => {

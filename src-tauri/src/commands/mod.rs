@@ -398,8 +398,19 @@ pub fn set_visualizer(active: bool, state: State<'_, AppState>) {
 /// emits `audio-spectrum` so YouTube and anything else on the machine can be
 /// visualized. No monitor/playback, so there's no echo.
 #[tauri::command]
-pub fn start_viz_capture(device: Option<String>, app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
-    let capture = crate::audio::viz_capture::start(device, app).map_err(AppError::Other)?;
+pub async fn start_viz_capture(
+    device: Option<String>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> AppResult<()> {
+    // Setup blocks briefly (device open + a bounded wait); run it off the main
+    // thread so the UI doesn't freeze while the capture comes up.
+    let capture = tauri::async_runtime::spawn_blocking(move || {
+        crate::audio::viz_capture::start(device, app)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("viz-capture setup task failed: {e}")))?
+    .map_err(AppError::Other)?;
     // Dropping the previous session (if any) stops + joins its thread.
     *lock_unpoisoned(&state.viz_capture) = Some(capture);
     Ok(())
@@ -459,8 +470,15 @@ pub async fn relink_track(
 /// visualizer can show YouTube without a virtual driver. Surfaces the
 /// permission error if Screen Recording isn't granted.
 #[tauri::command]
-pub fn start_screen_audio(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
-    let capture = crate::audio::screen_audio::start(app).map_err(AppError::Other)?;
+pub async fn start_screen_audio(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
+    // ScreenCaptureKit setup waits up to ~5s for permission/first frame; run it
+    // off the main thread so the UI doesn't freeze during setup.
+    let capture = tauri::async_runtime::spawn_blocking(move || {
+        crate::audio::screen_audio::start(app)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("screen-audio setup task failed: {e}")))?
+    .map_err(AppError::Other)?;
     *lock_unpoisoned(&state.screen_audio) = Some(capture);
     Ok(())
 }

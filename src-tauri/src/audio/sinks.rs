@@ -364,8 +364,20 @@ impl FlacSink {
     }
 }
 
+/// Cap FLAC's in-RAM sample buffer — flacenc is buffer-based, so the whole
+/// recording is held in memory until finalize. ~2 GB of i32 (~87 min of stereo
+/// 48 kHz); longer recordings should use WAV/AIFF, which stream to disk. On the
+/// cap, write_samples errors and the recorder finalizes what's buffered so far.
+const FLAC_MAX_SAMPLES: usize = 500_000_000;
+
 impl RecordSink for FlacSink {
     fn write_samples(&mut self, interleaved: &[f32]) -> std::io::Result<()> {
+        if self.samples.len() + interleaved.len() > FLAC_MAX_SAMPLES {
+            return Err(std::io::Error::other(
+                "FLAC recording hit the ~2 GB in-memory cap; use WAV or AIFF for \
+                 multi-hour recordings (they stream directly to disk)",
+            ));
+        }
         match self.bits {
             PcmBits::I16 => self
                 .samples

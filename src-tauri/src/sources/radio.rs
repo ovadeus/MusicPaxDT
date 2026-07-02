@@ -302,9 +302,23 @@ fn custom_station(name: String, url: String, codec: Option<String>) -> RadioStat
     }
 }
 
+/// Read at most `cap` bytes of a response body as lossy UTF-8. Guards against a
+/// mislabeled endless audio stream being slurped whole into memory.
+async fn read_capped(mut resp: reqwest::Response, cap: usize) -> Result<String, String> {
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(|e| format!("Read failed: {e}"))? {
+        buf.extend_from_slice(&chunk);
+        if buf.len() >= cap {
+            buf.truncate(cap);
+            break;
+        }
+    }
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
 /// Resolve a pasted link into a playable station (best effort). Never reads an
-/// audio body (those are infinite streams) — only headers, plus text for
-/// playlist/HTML content types.
+/// audio body (those are infinite streams) — only headers, plus a capped amount
+/// of text for playlist/HTML content types.
 pub async fn resolve_stream(input: &str) -> Result<RadioStation, String> {
     let input = input.trim();
     if !(input.starts_with("http://") || input.starts_with("https://")) {
@@ -335,8 +349,14 @@ pub async fn resolve_stream(input: &str) -> Result<RadioStation, String> {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
 
-    // Direct audio response: use the URL as-is, do NOT read the (endless) body.
-    if ctype.starts_with("audio/") || ctype.contains("application/ogg") {
+    // Direct audio/binary/video response: use the URL as-is, do NOT read the
+    // (endless) body. octet-stream and video/* are treated as direct too, since
+    // streams are sometimes served under those types.
+    if ctype.starts_with("audio/")
+        || ctype.starts_with("video/")
+        || ctype.contains("application/ogg")
+        || ctype.contains("application/octet-stream")
+    {
         return Ok(custom_station(
             icy_name.unwrap_or_else(|| host_of(input)),
             input.to_string(),
@@ -344,8 +364,9 @@ pub async fn resolve_stream(input: &str) -> Result<RadioStation, String> {
         ));
     }
 
-    // Playlist or HTML → safe to read as text.
-    let body = resp.text().await.map_err(|e| format!("Read failed: {e}"))?;
+    // Playlist or HTML → safe to read as text, but cap the read so a mislabeled
+    // endless stream (wrong or missing content-type) can't exhaust memory.
+    let body = read_capped(resp, 4 * 1024 * 1024).await?;
 
     if ctype.contains("mpegurl")
         || ctype.contains("scpls")

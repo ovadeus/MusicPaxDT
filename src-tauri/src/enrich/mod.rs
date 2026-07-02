@@ -83,9 +83,13 @@ pub async fn enrich_track(
                         let c_title = nonempty(&cleaned.title);
                         let c_artist = nonempty(&cleaned.artist);
                         // Re-confirm against free MusicBrainz — the source of truth.
+                        // Note: don't `?` this lookup. We've already paid for the LLM
+                        // call above, so a MusicBrainz network error must NOT discard
+                        // the outcome (and its used_llm: true) — fall through to the
+                        // LLM-only suggestion below so the batch spend cap still meters it.
                         if let Some(title) = c_title {
-                            if let Some(mut s) =
-                                musicbrainz::lookup(c_artist.unwrap_or(""), title).await?
+                            if let Ok(Some(mut s)) =
+                                musicbrainz::lookup(c_artist.unwrap_or(""), title).await
                             {
                                 if s.confidence >= 0.85 {
                                     s.source = "llm+musicbrainz".into();

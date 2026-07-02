@@ -335,15 +335,16 @@ pub async fn lookup_by_recording_id(mbid: &str) -> Result<Option<MetadataSuggest
         ..Default::default()
     };
     if let Some(release) = r.releases.as_deref().and_then(best_release) {
-        suggestion.year = release
-            .date
-            .as_deref()
-            .and_then(|d| d.get(0..4))
-            .and_then(|y| y.parse::<i64>().ok());
+        suggestion.year = release_year(release);
         if let Some(group) = &release.release_group {
             suggestion.album = group.title.clone();
             if let Some(gid) = &group.id {
                 suggestion.art_url = Some(cover_art_url(gid));
+                // Prefer the album's original year over this pressing's date, so
+                // a fingerprint match to a reissue still reports the first release.
+                if let Some(y) = release_group_first_year(gid).await {
+                    suggestion.year = Some(y);
+                }
             }
         }
     }

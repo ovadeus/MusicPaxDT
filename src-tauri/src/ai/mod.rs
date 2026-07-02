@@ -109,9 +109,11 @@ impl LlmProvider {
                 anthropic_call(api_key, model, system, prompt, max_tokens).await
             }
             LlmProvider::OpenAi { api_key, model } => {
-                openai_call(api_key, model, system, prompt).await
+                openai_call(api_key, model, system, prompt, max_tokens).await
             }
-            LlmProvider::Ollama { host, model } => ollama_call(host, model, system, prompt).await,
+            LlmProvider::Ollama { host, model } => {
+                ollama_call(host, model, system, prompt, max_tokens).await
+            }
         }
     }
 
@@ -120,6 +122,32 @@ impl LlmProvider {
     pub async fn complete(&self, system: &str, prompt: &str) -> Result<String, String> {
         self.complete_raw(system, prompt, 8192).await
     }
+}
+
+/// Read a provider response body, turning a non-2xx status into a clear error
+/// so a 429/5xx (whose body is an error page or a differently-shaped JSON)
+/// doesn't masquerade as a JSON "parse failed". Surfaces the API's own error
+/// message when present, else a short body snippet.
+async fn checked_body(resp: reqwest::Response, provider: &str) -> Result<String, String> {
+    let status = resp.status();
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| format!("{provider} read failed: {e}"))?;
+    if !status.is_success() {
+        let msg = serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|v| {
+                let err = v.get("error")?;
+                err.get("message")
+                    .and_then(|m| m.as_str())
+                    .or_else(|| err.as_str())
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| body.chars().take(200).collect::<String>().trim().to_string());
+        return Err(format!("{provider} HTTP {}: {msg}", status.as_u16()));
+    }
+    Ok(body)
 }
 
 // --- Anthropic Messages API ------------------------------------------------
@@ -178,10 +206,9 @@ async fn anthropic_call(
         .send()
         .await
         .map_err(|e| format!("Anthropic request failed: {e}"))?;
-    let parsed: Resp = resp
-        .json()
-        .await
-        .map_err(|e| format!("Anthropic parse failed: {e}"))?;
+    let body = checked_body(resp, "Anthropic").await?;
+    let parsed: Resp =
+        serde_json::from_str(&body).map_err(|e| format!("Anthropic parse failed: {e}"))?;
     if let Some(err) = parsed.error {
         return Err(format!("Anthropic API error: {}", err.message));
     }
@@ -209,6 +236,7 @@ async fn openai_call(
     model: &str,
     system: &str,
     prompt: &str,
+    max_tokens: u32,
 ) -> Result<String, String> {
     #[derive(Deserialize)]
     struct Resp {
@@ -230,6 +258,7 @@ async fn openai_call(
 
     let body = json!({
         "model": model,
+        "max_completion_tokens": max_tokens,
         "messages": [
             { "role": "system", "content": system },
             { "role": "user", "content": prompt },
@@ -242,10 +271,9 @@ async fn openai_call(
         .send()
         .await
         .map_err(|e| format!("OpenAI request failed: {e}"))?;
-    let parsed: Resp = resp
-        .json()
-        .await
-        .map_err(|e| format!("OpenAI parse failed: {e}"))?;
+    let body = checked_body(resp, "OpenAI").await?;
+    let parsed: Resp =
+        serde_json::from_str(&body).map_err(|e| format!("OpenAI parse failed: {e}"))?;
     if let Some(err) = parsed.error {
         return Err(format!("OpenAI API error: {}", err.message));
     }
@@ -265,6 +293,7 @@ async fn ollama_call(
     model: &str,
     system: &str,
     prompt: &str,
+    max_tokens: u32,
 ) -> Result<String, String> {
     #[derive(Deserialize)]
     struct Resp {
@@ -278,6 +307,9 @@ async fn ollama_call(
         "prompt": prompt,
         "stream": false,
         "format": "json",
+        // Ollama's default num_predict is small; without this a large assistant
+        // response (up to max_tokens) would be silently truncated.
+        "options": { "num_predict": max_tokens },
     });
     let resp = http()
         .post(format!("{host}/api/generate"))
@@ -285,10 +317,9 @@ async fn ollama_call(
         .send()
         .await
         .map_err(|e| format!("Ollama request failed (is it running?): {e}"))?;
-    let parsed: Resp = resp
-        .json()
-        .await
-        .map_err(|e| format!("Ollama parse failed: {e}"))?;
+    let body = checked_body(resp, "Ollama").await?;
+    let parsed: Resp =
+        serde_json::from_str(&body).map_err(|e| format!("Ollama parse failed: {e}"))?;
     if let Some(err) = parsed.error {
         return Err(format!("Ollama error: {err}"));
     }

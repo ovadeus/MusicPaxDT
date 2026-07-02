@@ -42,6 +42,9 @@ pub fn start(device: Option<String>, app: AppHandle) -> Result<VizCapture, Strin
     let dev = find_input_device(device.as_deref())?;
     let stop = Arc::new(AtomicBool::new(false));
     let stop2 = stop.clone();
+    // Report setup back so a config/stream failure surfaces to the command
+    // instead of the command reporting success while no spectrum ever arrives.
+    let (setup_tx, setup_rx) = std::sync::mpsc::channel::<Result<(), String>>();
 
     let join = thread::Builder::new()
         .name("viz-capture".into())
@@ -49,7 +52,7 @@ pub fn start(device: Option<String>, app: AppHandle) -> Result<VizCapture, Strin
             let config = match dev.default_input_config() {
                 Ok(c) => c,
                 Err(e) => {
-                    eprintln!("viz capture: bad input config: {e}");
+                    let _ = setup_tx.send(Err(format!("viz capture: bad input config: {e}")));
                     return;
                 }
             };
@@ -60,10 +63,11 @@ pub fn start(device: Option<String>, app: AppHandle) -> Result<VizCapture, Strin
             let stream = match build_input_stream(&dev, &config, channels, prod) {
                 Ok(s) => s,
                 Err(e) => {
-                    eprintln!("viz capture: {e}");
+                    let _ = setup_tx.send(Err(format!("viz capture: {e}")));
                     return;
                 }
             };
+            let _ = setup_tx.send(Ok(()));
 
             let freqs = viz_band_freqs();
             let mut buf: VecDeque<f32> = VecDeque::with_capacity(VIZ_WINDOW * 2);
@@ -87,8 +91,20 @@ pub fn start(device: Option<String>, app: AppHandle) -> Result<VizCapture, Strin
         })
         .map_err(|e| format!("failed to start viz-capture thread: {e}"))?;
 
-    Ok(VizCapture {
-        stop,
-        join: Some(join),
-    })
+    match setup_rx.recv_timeout(Duration::from_secs(3)) {
+        Ok(Ok(())) => Ok(VizCapture {
+            stop,
+            join: Some(join),
+        }),
+        Ok(Err(e)) => {
+            stop.store(true, Ordering::Release);
+            let _ = join.join();
+            Err(e)
+        }
+        // Slow start — assume it's coming up; the loop emits once samples flow.
+        Err(_) => Ok(VizCapture {
+            stop,
+            join: Some(join),
+        }),
+    }
 }
