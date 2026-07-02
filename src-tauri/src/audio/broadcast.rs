@@ -15,7 +15,7 @@
 //! this tee, so it can't be re-broadcast.
 
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{Shutdown, TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -69,6 +69,9 @@ struct Status {
     started: Mutex<Option<Instant>>,
     message: Mutex<String>,
     stop: AtomicBool,
+    /// A clone of the worker's live socket. `stop()` shuts it down so a worker
+    /// blocked in a socket write returns at once and `join()` stays bounded.
+    kill: Mutex<Option<TcpStream>>,
 }
 
 impl Status {
@@ -79,6 +82,7 @@ impl Status {
             started: Mutex::new(None),
             message: Mutex::new(String::new()),
             stop: AtomicBool::new(false),
+            kill: Mutex::new(None),
         }
     }
 
@@ -162,11 +166,17 @@ impl Broadcaster {
     pub fn stop(&self, shared: &Shared) {
         self.status.stop.store(true, Ordering::Relaxed);
         shared.broadcasting.store(false, Ordering::Relaxed);
+        // Unblock a worker parked in a socket write/read so join() is bounded
+        // even if the network has gone away.
+        if let Some(sock) = lock_unpoisoned(&self.status.kill).as_ref() {
+            let _ = sock.shutdown(Shutdown::Both);
+        }
         if let Some(j) = lock_unpoisoned(&self.join).take() {
             let _ = j.join();
         }
         self.status.state.store(ST_IDLE, Ordering::Relaxed);
         *lock_unpoisoned(&self.status.started) = None;
+        *lock_unpoisoned(&self.status.kill) = None;
     }
 
     pub fn status(&self) -> BroadcastStatus {
@@ -220,19 +230,42 @@ fn handshake_result(first_line: &str) -> Result<(), String> {
     }
 }
 
+/// Bounds every blocking socket op so a dead/stalled network can never hang a
+/// broadcast (and therefore never hangs Stop/Go-Live, which join the worker).
+const NET_TIMEOUT: Duration = Duration::from_secs(10);
+
 fn connect_and_handshake(cfg: &IcecastConfig, sample_rate: u32) -> Result<TcpStream, String> {
     let addr = format!("{}:{}", cfg.host, cfg.port);
-    let mut sock = TcpStream::connect(&addr).map_err(|e| format!("connect {addr}: {e}"))?;
+    // Resolve first so we can use connect_timeout (which needs a SocketAddr).
+    let resolved = addr
+        .to_socket_addrs()
+        .map_err(|e| format!("resolve {addr}: {e}"))?;
+    let mut sock = None;
+    let mut last_err = format!("no addresses for {addr}");
+    for sa in resolved {
+        match TcpStream::connect_timeout(&sa, NET_TIMEOUT) {
+            Ok(s) => {
+                sock = Some(s);
+                break;
+            }
+            Err(e) => last_err = format!("connect {sa}: {e}"),
+        }
+    }
+    let mut sock = sock.ok_or(last_err)?;
     sock.set_nodelay(true).ok();
+    // Write timeout persists through the streaming loop: a stalled send fails
+    // fast and is treated as connection-lost (→ reconnect) rather than blocking.
+    sock.set_write_timeout(Some(NET_TIMEOUT)).ok();
     sock.write_all(build_source_request(cfg, sample_rate).as_bytes())
         .map_err(|e| format!("handshake write failed: {e}"))?;
-    sock.set_read_timeout(Some(Duration::from_secs(10))).ok();
+    sock.set_read_timeout(Some(NET_TIMEOUT)).ok();
     let mut buf = [0u8; 1024];
     let n = sock
         .read(&mut buf)
         .map_err(|e| format!("no handshake response: {e}"))?;
     let resp = String::from_utf8_lossy(&buf[..n]);
     handshake_result(resp.lines().next().unwrap_or(""))?;
+    // Source protocol is write-only from here; drop the read timeout.
     sock.set_read_timeout(None).ok();
     Ok(sock)
 }
@@ -281,6 +314,8 @@ fn run_worker(shared: Arc<Shared>, cfg: IcecastConfig, status: Arc<Status>, app:
             }
         };
         backoff_steps = 1;
+        // Hand stop() a clone it can shut down to interrupt a stalled write.
+        *lock_unpoisoned(&status.kill) = sock.try_clone().ok();
 
         let mut encoder = match build_mp3_encoder(sample_rate, cfg.bitrate) {
             Ok(e) => e,
@@ -365,6 +400,9 @@ fn run_worker(shared: Arc<Shared>, cfg: IcecastConfig, status: Arc<Status>, app:
                 break 'session;
             }
             if let Err(e) = sock.write_all(&out) {
+                if status.stop.load(Ordering::Relaxed) {
+                    break 'session; // stop() shut the socket down — don't reconnect
+                }
                 status.set(ST_RECONNECTING, &format!("connection lost: {e}"));
                 emit(&app, &status, bitrate);
                 break; // inner loop → reconnect via outer 'session loop
@@ -382,6 +420,7 @@ fn run_worker(shared: Arc<Shared>, cfg: IcecastConfig, status: Arc<Status>, app:
 
     shared.broadcasting.store(false, Ordering::Relaxed);
     status.state.store(ST_IDLE, Ordering::Relaxed);
+    *lock_unpoisoned(&status.kill) = None;
     emit(&app, &status, bitrate);
 }
 
@@ -441,5 +480,21 @@ mod tests {
             .unwrap_err()
             .contains("mount"));
         assert!(handshake_result("HTTP/1.0 500 Boom").is_err());
+    }
+
+    #[test]
+    #[ignore = "opens a real socket to a blackhole address"]
+    fn connect_bails_out_instead_of_hanging() {
+        // TEST-NET-1 (192.0.2.0/24) is reserved and unroutable, so the connect
+        // must trip the timeout rather than blocking indefinitely.
+        let mut c = cfg();
+        c.host = "192.0.2.1".into();
+        c.port = 9;
+        let t = Instant::now();
+        assert!(connect_and_handshake(&c, 44_100).is_err());
+        assert!(
+            t.elapsed() < NET_TIMEOUT + Duration::from_secs(5),
+            "connect should fail within the timeout window, not hang"
+        );
     }
 }

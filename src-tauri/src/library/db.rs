@@ -59,35 +59,46 @@ pub fn open(path: &Path) -> AppResult<Connection> {
 
 fn migrate(conn: &Connection) -> AppResult<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    // Each step and its user_version bump commit together. PRAGMA user_version is
+    // transactional in SQLite, so a crash mid-migration rolls the whole step back
+    // instead of leaving a half-applied schema that permanently bricks open().
     if version < 1 {
-        conn.execute_batch(MIGRATION_0001)?;
-        conn.pragma_update(None, "user_version", 1)?;
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(MIGRATION_0001)?;
+        tx.pragma_update(None, "user_version", 1)?;
+        tx.commit()?;
     }
     if version < 2 {
         // Media type tag: Music / Podcast / Audiobook / Movie / Radio / Tutorial.
-        conn.execute_batch(
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
             "ALTER TABLE tracks ADD COLUMN media_type TEXT NOT NULL DEFAULT 'music';",
         )?;
-        conn.pragma_update(None, "user_version", 2)?;
+        tx.pragma_update(None, "user_version", 2)?;
+        tx.commit()?;
     }
     if version < 3 {
         // Backfill the unambiguous case: radio stations imported before media
         // types existed are still tagged the 'music' default. Tag them Radio so
         // the type filter chips work. (Other sources can't be inferred.)
-        conn.execute_batch(
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
             "UPDATE tracks SET media_type = 'radio'
              WHERE source_kind = 'radio' AND media_type = 'music';",
         )?;
-        conn.pragma_update(None, "user_version", 3)?;
+        tx.pragma_update(None, "user_version", 3)?;
+        tx.commit()?;
     }
     if version < 4 {
         // User-orderable playlists (drag to reorder). Seed positions from the
         // existing id order so the sidebar looks unchanged until reordered.
-        conn.execute_batch(
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
             "ALTER TABLE playlists ADD COLUMN position INTEGER NOT NULL DEFAULT 0;
              UPDATE playlists SET position = id;",
         )?;
-        conn.pragma_update(None, "user_version", 4)?;
+        tx.pragma_update(None, "user_version", 4)?;
+        tx.commit()?;
     }
     Ok(())
 }
@@ -335,14 +346,17 @@ pub fn set_setting(conn: &Connection, key: &str, value: &str) -> AppResult<()> {
 /// plus its playlist/cue/history references. Does NOT touch the audio file on
 /// disk — only the library entry.
 pub fn delete_track(conn: &Connection, id: i64) -> AppResult<()> {
-    conn.execute("DELETE FROM playlist_items WHERE track_id = ?1", [id])?;
-    conn.execute("DELETE FROM crate_items WHERE track_id = ?1", [id])?;
-    conn.execute("DELETE FROM cues WHERE track_id = ?1", [id])?;
-    conn.execute("DELETE FROM history WHERE track_id = ?1", [id])?;
-    let n = conn.execute("DELETE FROM tracks WHERE id = ?1", [id])?;
+    let tx = conn.unchecked_transaction()?;
+    tx.execute("DELETE FROM playlist_items WHERE track_id = ?1", [id])?;
+    tx.execute("DELETE FROM crate_items WHERE track_id = ?1", [id])?;
+    tx.execute("DELETE FROM cues WHERE track_id = ?1", [id])?;
+    tx.execute("DELETE FROM history WHERE track_id = ?1", [id])?;
+    let n = tx.execute("DELETE FROM tracks WHERE id = ?1", [id])?;
     if n == 0 {
+        // tx drops → the reference cleanup rolls back too.
         return Err(AppError::TrackNotFound(id));
     }
+    tx.commit()?;
     Ok(())
 }
 
@@ -401,12 +415,14 @@ pub fn create_playlist(conn: &Connection, name: &str) -> AppResult<i64> {
 
 /// Persist a new playlist order (the id list in display order → positions).
 pub fn reorder_playlists(conn: &Connection, ids: &[i64]) -> AppResult<()> {
+    let tx = conn.unchecked_transaction()?;
     for (i, id) in ids.iter().enumerate() {
-        conn.execute(
+        tx.execute(
             "UPDATE playlists SET position = ?1 WHERE id = ?2",
             params![i as i64, id],
         )?;
     }
+    tx.commit()?;
     Ok(())
 }
 
@@ -458,8 +474,10 @@ pub fn add_to_playlist(conn: &Connection, playlist_id: i64, track_id: i64) -> Ap
 }
 
 pub fn delete_playlist(conn: &Connection, playlist_id: i64) -> AppResult<()> {
-    conn.execute("DELETE FROM playlist_items WHERE playlist_id = ?1", [playlist_id])?;
-    conn.execute("DELETE FROM playlists WHERE id = ?1", [playlist_id])?;
+    let tx = conn.unchecked_transaction()?;
+    tx.execute("DELETE FROM playlist_items WHERE playlist_id = ?1", [playlist_id])?;
+    tx.execute("DELETE FROM playlists WHERE id = ?1", [playlist_id])?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -473,14 +491,16 @@ pub fn rename_playlist(conn: &Connection, playlist_id: i64, name: &str) -> AppRe
 
 /// Record a successful load: bump play_count and append to history.
 pub fn record_play(conn: &Connection, track_id: i64, played_at: i64) -> AppResult<()> {
-    conn.execute(
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
         "UPDATE tracks SET play_count = play_count + 1 WHERE id = ?1",
         [track_id],
     )?;
-    conn.execute(
+    tx.execute(
         "INSERT INTO history(track_id, played_at, deck) VALUES (?1, ?2, 'main')",
         params![track_id, played_at],
     )?;
+    tx.commit()?;
     Ok(())
 }
 

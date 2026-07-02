@@ -213,7 +213,14 @@ fn percent_decode(s: &str) -> String {
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
+        // Only treat "%XY" as an escape when X and Y are ASCII hex digits. That
+        // guard also keeps the slice on a char boundary: a multibyte UTF-8 byte
+        // after '%' (e.g. "%aé") would otherwise panic on `&s[i + 1..i + 3]`.
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && bytes[i + 1].is_ascii_hexdigit()
+            && bytes[i + 2].is_ascii_hexdigit()
+        {
             if let Ok(b) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
                 out.push(b);
                 i += 3;
@@ -687,5 +694,17 @@ mod tests {
     fn percent_decoding_handles_spaces_and_specials() {
         assert_eq!(percent_decode("a%20b%2Dc"), "a b-c");
         assert_eq!(percent_decode("plus+space"), "plus space");
+    }
+
+    #[test]
+    fn percent_decode_survives_bare_and_multibyte_percent() {
+        // A '%' followed by a multibyte UTF-8 byte used to slice mid-char and
+        // panic; now it's passed through literally.
+        assert_eq!(percent_decode("%aé.mp3"), "%aé.mp3");
+        assert_eq!(percent_decode("100% done"), "100% done");
+        assert_eq!(percent_decode("%zz"), "%zz");
+        assert_eq!(percent_decode("trailing%"), "trailing%");
+        // Valid escapes still decode.
+        assert_eq!(percent_decode("%41%42"), "AB");
     }
 }

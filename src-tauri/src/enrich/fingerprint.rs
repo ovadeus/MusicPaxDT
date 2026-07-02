@@ -29,7 +29,15 @@ const KNOWN_FPCALC_PATHS: &[&str] = &[
 pub fn resolve_fpcalc(configured: Option<&str>) -> Option<PathBuf> {
     if let Some(p) = configured.map(str::trim).filter(|s| !s.is_empty()) {
         let path = PathBuf::from(p);
-        if path.is_file() {
+        // The configured path comes from the generic (webview-writable) settings
+        // KV store, and we spawn it as a subprocess — so only honor it when it's
+        // actually named `fpcalc`. Otherwise an arbitrary binary could be run via
+        // IPC. The PATH / known-location branches below only ever run `fpcalc`.
+        let is_fpcalc = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .is_some_and(|s| s.eq_ignore_ascii_case("fpcalc"));
+        if is_fpcalc && path.is_file() {
             return Some(path);
         }
     }
@@ -177,18 +185,33 @@ mod tests {
 
     #[test]
     fn resolves_configured_path_when_valid() {
-        // A path that exists (this source file) stands in for the binary.
-        let me = file!();
+        // A configured path is honored only when it exists AND is named `fpcalc`
+        // — it's spawned as a subprocess and comes from webview-writable settings.
+        let dir = std::env::temp_dir().join(format!("stack-fpcalc-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let good = dir.join("fpcalc");
+        std::fs::write(&good, b"#!/bin/sh\n").unwrap();
         assert_eq!(
-            resolve_fpcalc(Some(me)).as_deref(),
-            Some(Path::new(me)),
-            "a valid configured path should win"
+            resolve_fpcalc(good.to_str()).as_deref(),
+            Some(good.as_path()),
+            "a valid fpcalc path should win"
         );
+
+        // A real file NOT named fpcalc must be rejected (arbitrary-binary guard).
+        let evil = dir.join("evil");
+        std::fs::write(&evil, b"#!/bin/sh\n").unwrap();
+        assert!(
+            resolve_fpcalc(evil.to_str()).is_none_or(|p| p != evil),
+            "a non-fpcalc configured path must never be returned"
+        );
+
         assert!(
             resolve_fpcalc(Some("/no/such/fpcalc/here"))
                 .is_none_or(|p| p != Path::new("/no/such/fpcalc/here")),
-            "an invalid configured path must not be returned verbatim"
+            "a non-existent configured path must not be returned verbatim"
         );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Live fingerprint compute against a generated WAV. Needs fpcalc present.

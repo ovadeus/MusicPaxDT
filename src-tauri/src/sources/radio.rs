@@ -238,11 +238,21 @@ fn parse_player_streams(html: &str) -> Option<String> {
 }
 
 fn title_of(html: &str) -> Option<String> {
-    let lower = html.to_lowercase();
-    let start = lower.find("<title")?;
-    let gt = lower[start..].find('>')? + start + 1;
-    let end = lower[gt..].find("</title>")? + gt;
-    let t = html[gt..end].trim();
+    // ASCII-lowercase a byte copy for the case-insensitive tag search. Unlike
+    // str::to_lowercase this is length-preserving, so every index found here is
+    // a valid byte offset into `html` (str::to_lowercase can change byte lengths,
+    // which made the original slice `html[gt..end]` panic on non-ASCII pages).
+    let lower: Vec<u8> = html.bytes().map(|b| b.to_ascii_lowercase()).collect();
+    let find = |needle: &[u8], from: usize| -> Option<usize> {
+        lower[from..]
+            .windows(needle.len())
+            .position(|w| w == needle)
+            .map(|p| p + from)
+    };
+    let start = find(b"<title", 0)?;
+    let gt = find(b">", start)? + 1;
+    let end = find(b"</title>", gt)?;
+    let t = html.get(gt..end)?.trim();
     (!t.is_empty()).then(|| t.to_string())
 }
 
@@ -394,6 +404,21 @@ mod tests {
         assert_eq!(urlencoding("jazz & blues"), "jazz%20%26%20blues");
         assert_eq!(urlencoding("KEXP"), "KEXP");
         assert_eq!(urlencoding("c#"), "c%23");
+    }
+
+    #[test]
+    fn title_of_is_case_insensitive_and_utf8_safe() {
+        assert_eq!(
+            title_of("<html><TITLE>Radio Ñoño — Música</TITLE></html>").as_deref(),
+            Some("Radio Ñoño — Música"),
+        );
+        // Non-ASCII BEFORE the title shifts byte lengths under str::to_lowercase;
+        // the length-preserving ASCII search must still slice `html` correctly.
+        assert_eq!(
+            title_of("<p>İstanbul Ⅷ café</p><title> Hello </title>").as_deref(),
+            Some("Hello"),
+        );
+        assert_eq!(title_of("<p>no title here</p>"), None);
     }
 
     #[test]

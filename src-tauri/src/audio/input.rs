@@ -58,16 +58,24 @@ fn recorder_loop(
             }
         }
         if drained > 0 {
+            let mut failed = false;
             if let Some(w) = writer.as_mut() {
                 if let Err(e) = w.write_samples(&buf[..drained]) {
                     eprintln!("recording write failed: {e}");
-                    shared.recording.store(false, Ordering::Release);
-                    writer = None;
+                    failed = true;
+                } else {
+                    shared.rec_frames.store(w.frames(), Ordering::Relaxed);
                 }
-                shared.rec_frames.store(
-                    writer.as_ref().map(|w| w.frames()).unwrap_or(0),
-                    Ordering::Relaxed,
-                );
+            }
+            if failed {
+                shared.recording.store(false, Ordering::Release);
+                shared.rec_frames.store(0, Ordering::Relaxed);
+                // Finalize so the header is patched to the frames written so far;
+                // dropping the sink unfinalized leaves a zeroed header — i.e. the
+                // ENTIRE already-recorded file becomes unreadable.
+                if let Some(dead) = writer.take() {
+                    let _ = dead.finalize();
+                }
             }
         }
 
@@ -381,7 +389,7 @@ fn relay_loop(
                     let in_l: Vec<f32> = acc_l.drain(..RESAMPLE_CHUNK).collect();
                     let in_r: Vec<f32> = acc_r.drain(..RESAMPLE_CHUNK).collect();
                     match rs.process(&[in_l, in_r], None) {
-                        Ok(out) => push_monitor(&mut output, &out[0], &out[1], &stop),
+                        Ok(out) => push_monitor(&mut output, &out[0], &out[1], &stop, &shared),
                         Err(e) => {
                             eprintln!("line-in resample error: {e}");
                             return;
@@ -399,6 +407,10 @@ fn relay_loop(
                         let _ = output.push(frame_buf[i]);
                         let _ = output.push(frame_buf[i + 1]);
                         i += 2;
+                    } else if !shared.is_playing() {
+                        // See push_monitor: drop the monitor tail when paused so
+                        // the relay never stalls (recording keeps flowing).
+                        break;
                     } else {
                         thread::sleep(Duration::from_millis(2));
                     }
@@ -413,6 +425,7 @@ fn push_monitor(
     l: &[f32],
     r: &[f32],
     stop: &std::sync::atomic::AtomicBool,
+    shared: &Shared,
 ) {
     let len = l.len().min(r.len());
     let mut i = 0;
@@ -424,6 +437,13 @@ fn push_monitor(
             let _ = output.push(l[i]);
             let _ = output.push(r[i]);
             i += 1;
+        } else if !shared.is_playing() {
+            // Paused/stopped: the output callback isn't draining the monitor
+            // ring, so blocking here would stall the whole relay — silently
+            // punching a hole in an active recording and backing input up into
+            // permanent latency after resume. Drop the monitor tail instead;
+            // the relay stays live so it keeps pulling input and teeing to disk.
+            return;
         } else {
             thread::sleep(Duration::from_millis(2));
         }

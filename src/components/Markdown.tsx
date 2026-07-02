@@ -4,7 +4,15 @@
 /// restricted to http/https/mailto.
 
 function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  // Quotes are escaped too: escapeHtml runs on the whole source before inline()
+  // builds any `href="..."`, so a link URL like https://x"onmouseover="alert(1)
+  // can't break out of the attribute and inject an event handler.
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 /// Inline spans. Operates on already-escaped text.

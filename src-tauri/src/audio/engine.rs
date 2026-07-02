@@ -153,6 +153,14 @@ impl Shared {
         PlaybackState::from_u8(self.state.load(Ordering::Relaxed))
     }
 
+    /// True only while transport is actively playing. The output callback pops
+    /// the monitor ring only when this holds, so the line-in relay uses it to
+    /// decide whether to block on monitor backpressure (playing) or drop the
+    /// monitor tail (paused/stopped) and keep draining input + teeing to record.
+    pub fn is_playing(&self) -> bool {
+        self.state.load(Ordering::Acquire) == STATE_PLAYING
+    }
+
     pub fn position_ms(&self) -> u64 {
         let rate = self.out_rate.load(Ordering::Relaxed).max(1) as u64;
         let pos = self.base_ms.load(Ordering::Relaxed)
