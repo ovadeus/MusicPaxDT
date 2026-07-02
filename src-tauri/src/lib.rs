@@ -18,7 +18,17 @@ pub fn run() {
     // the tauri:// custom protocol — YouTube embeds require a real HTTP
     // referrer (player error 153 otherwise). Dev mode already runs on the
     // Vite server, so the plugin is release-only.
-    let port = portpicker::pick_unused_port().unwrap_or(17_432);
+    //
+    // Prefer a fixed port so the webview origin is stable across launches —
+    // otherwise a fresh random port changes the origin and silently wipes all
+    // localStorage-persisted UI state on every restart. Fall back to a random
+    // free port only if the fixed one is already taken.
+    const UI_PORT: u16 = 17_432;
+    let port = if portpicker::is_free_tcp(UI_PORT) {
+        UI_PORT
+    } else {
+        portpicker::pick_unused_port().unwrap_or(UI_PORT)
+    };
 
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())

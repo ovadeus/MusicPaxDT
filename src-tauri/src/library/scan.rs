@@ -134,6 +134,16 @@ pub fn import_folder(conn: &Connection, root: &Path) -> AppResult<ImportResult> 
     };
     let added_at = now_unix();
 
+    // Batch inserts in a transaction instead of one implicit (fsync-ed)
+    // transaction per file — a large import is dramatically faster. Commit in
+    // chunks so a process/power interruption loses at most the current chunk.
+    // Per-file tag/insert errors are collected (not propagated), so on the normal
+    // path the same files import as before; only a fatal DB error (e.g. disk
+    // full) now aborts the whole import instead of leaving a partial one.
+    const CHUNK: usize = 500;
+    let mut tx = conn.unchecked_transaction()?;
+    let mut in_chunk = 0usize;
+
     for entry in WalkDir::new(root).follow_links(false) {
         let entry = match entry {
             Ok(e) => e,
@@ -146,14 +156,21 @@ pub fn import_folder(conn: &Connection, root: &Path) -> AppResult<ImportResult> 
             continue;
         }
         let track = read_track(entry.path());
-        match db::insert_track(conn, &track, added_at) {
+        match db::insert_track(&tx, &track, added_at) {
             Ok(true) => result.imported += 1,
             Ok(false) => result.skipped += 1,
             Err(e) => result
                 .errors
                 .push(format!("{}: {e}", entry.path().display())),
         }
+        in_chunk += 1;
+        if in_chunk >= CHUNK {
+            tx.commit()?;
+            tx = conn.unchecked_transaction()?;
+            in_chunk = 0;
+        }
     }
+    tx.commit()?;
 
     Ok(result)
 }

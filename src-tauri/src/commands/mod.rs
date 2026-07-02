@@ -131,10 +131,9 @@ pub async fn set_artist_bio(
 pub async fn read_image_data_url(path: String) -> AppResult<String> {
     use base64::Engine;
     tauri::async_runtime::spawn_blocking(move || {
-        let bytes = std::fs::read(&path)?;
-        if bytes.len() > 2_000_000 {
-            return Err(AppError::Other("image too large (max 2 MB)".into()));
-        }
+        // Only known image types — otherwise this command is a general
+        // "read any file into the webview" primitive. Reject up front so an
+        // arbitrary path can't be exfiltrated as a data URL.
         let mime = match PathBuf::from(&path)
             .extension()
             .and_then(|e| e.to_str())
@@ -146,8 +145,14 @@ pub async fn read_image_data_url(path: String) -> AppResult<String> {
             Some("gif") => "image/gif",
             Some("webp") => "image/webp",
             Some("svg") => "image/svg+xml",
-            _ => "application/octet-stream",
+            _ => return Err(AppError::Other("not an image file".into())),
         };
+        // Size-check via metadata BEFORE reading, so a huge file can't be slurped
+        // into memory just to be rejected.
+        if std::fs::metadata(&path)?.len() > 2_000_000 {
+            return Err(AppError::Other("image too large (max 2 MB)".into()));
+        }
+        let bytes = std::fs::read(&path)?;
         let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
         Ok(format!("data:{mime};base64,{b64}"))
     })
