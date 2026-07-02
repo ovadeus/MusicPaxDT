@@ -158,7 +158,14 @@ pub fn import_folder(conn: &Connection, root: &Path) -> AppResult<ImportResult> 
         if !entry.file_type().is_file() || !is_audio_file(entry.path()) {
             continue;
         }
-        let track = read_track(entry.path());
+        // Canonicalize so two access paths to the same physical file (e.g. a
+        // symlinked folder inside the root) produce ONE uri — the UNIQUE(uri)
+        // dedupe can then collapse them instead of importing duplicates.
+        let real = entry
+            .path()
+            .canonicalize()
+            .unwrap_or_else(|_| entry.path().to_path_buf());
+        let track = read_track(&real);
         match db::insert_track(&tx, &track, added_at) {
             Ok(true) => result.imported += 1,
             Ok(false) => result.skipped += 1,

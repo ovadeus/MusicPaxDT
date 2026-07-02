@@ -465,11 +465,13 @@ export default function App() {
   };
 
   const playTrack = useCallback(
-    async (track: Track) => {
+    async (track: Track, queue?: Track[]) => {
       // Freeze the queue context at play time so a later search/filter can't
-      // change what next/prev advance through. Feed items (negative ids) keep
-      // using feedQueueRef, which the feed maintains as it loads pages.
-      if (track.id >= 0) queueRef.current = tracksRef.current;
+      // change what next/prev advance through. Callers that already know the
+      // intended queue (e.g. play-a-playlist, whose view refresh is debounced
+      // and hasn't landed in tracksRef yet) pass it explicitly. Feed items
+      // (negative ids) keep using feedQueueRef, which the feed maintains.
+      if (track.id >= 0) queueRef.current = queue ?? tracksRef.current;
       try {
         if (track.capability === "OWNED") {
           setStream(null);
@@ -571,7 +573,9 @@ export default function App() {
           showStatus(`“${name}” is empty`);
           return;
         }
-        await playTrack(ts[0]);
+        // Pass the playlist as the queue explicitly — the view refresh above is
+        // debounced, so tracksRef still holds the previous view at this point.
+        await playTrack(ts[0], ts);
       } catch (e) {
         showStatus(`${e}`);
       }

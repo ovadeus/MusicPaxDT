@@ -351,11 +351,19 @@ pub async fn resolve_stream(input: &str) -> Result<RadioStation, String> {
 
     // Direct audio/binary/video response: use the URL as-is, do NOT read the
     // (endless) body. octet-stream and video/* are treated as direct too, since
-    // streams are sometimes served under those types.
+    // streams are sometimes served under those types — EXCEPT when the URL is a
+    // .pls/.m3u playlist file (servers commonly default those to octet-stream);
+    // those must fall through to the capped read + playlist parser below.
+    // (.m3u8 never reaches here: looks_like_direct_audio catches it earlier.)
+    let playlist_url = {
+        let l = input.to_lowercase();
+        let path = l.split(['?', '#']).next().unwrap_or(&l);
+        path.ends_with(".pls") || path.ends_with(".m3u")
+    };
     if ctype.starts_with("audio/")
         || ctype.starts_with("video/")
         || ctype.contains("application/ogg")
-        || ctype.contains("application/octet-stream")
+        || (ctype.contains("application/octet-stream") && !playlist_url)
     {
         return Ok(custom_station(
             icy_name.unwrap_or_else(|| host_of(input)),
