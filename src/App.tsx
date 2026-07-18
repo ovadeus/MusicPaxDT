@@ -18,6 +18,7 @@ import VizSettingsBoard from "./components/VizSettingsBoard";
 import { loadViz, saveViz, type VizSettings } from "./lib/vizSettings";
 import GoLivePanel from "./components/GoLivePanel";
 import AddUrlModal from "./components/AddUrlModal";
+import SharePlaylistModal from "./components/SharePlaylistModal";
 import YouTubeSearchView from "./components/YouTubeSearchView";
 import EnrichReviewModal from "./components/EnrichReviewModal";
 import ModeMenu, { type UiMode } from "./components/ModeMenu";
@@ -115,6 +116,7 @@ export default function App() {
   });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [addUrlMode, setAddUrlMode] = useState<"youtube" | "spotify" | null>(null);
+  const [shareTarget, setShareTarget] = useState<{ id: number; name: string } | null>(null);
   const [ytSearchOpen, setYtSearchOpen] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
     const saved = Number(localStorage.getItem("library.sidebarWidth"));
@@ -1011,6 +1013,19 @@ export default function App() {
                 })
                 .catch((e) => showStatus(`${e}`));
             }}
+            onRename={(id, name) => {
+              ipc
+                .renamePlaylist(id, name)
+                .then(() => {
+                  if (view.kind === "playlist" && view.id === id) {
+                    setView({ kind: "playlist", id, name });
+                  }
+                  refreshPlaylists();
+                  showStatus(`Renamed playlist to “${name}”`);
+                })
+                .catch((e) => showStatus(`${e}`));
+            }}
+            onShare={(id, name) => setShareTarget({ id, name })}
             onReorder={(ids) => {
               // Optimistic reorder, then persist + reconcile.
               setPlaylists((prev) => ids.flatMap((id) => prev.filter((p) => p.id === id)));
@@ -1091,6 +1106,11 @@ export default function App() {
             onMediaType={setMediaTypeFilter}
             missingIds={missingIds}
             onRelink={relinkFile}
+            onShare={
+              view.kind === "playlist"
+                ? () => setShareTarget({ id: view.id, name: view.name })
+                : undefined
+            }
           />
           )}
         </div>
@@ -1313,6 +1333,16 @@ export default function App() {
 
       {goLiveOpen && (
         <GoLivePanel onClose={() => setGoLiveOpen(false)} onError={showStatus} />
+      )}
+
+      {shareTarget && (
+        <SharePlaylistModal
+          playlistId={shareTarget.id}
+          playlistName={shareTarget.name}
+          onClose={() => setShareTarget(null)}
+          onError={showStatus}
+          onDone={showStatus}
+        />
       )}
 
       {ytSearchOpen && (

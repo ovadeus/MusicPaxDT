@@ -62,6 +62,7 @@ commands.allow = [
     "delete_playlist",
     "rename_playlist",
     "import_mpx_playlist",
+    "share_playlist",
     "youtube_search",
     "enrich_integration_status",
     "set_acoustid_key",

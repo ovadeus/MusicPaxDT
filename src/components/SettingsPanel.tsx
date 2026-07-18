@@ -289,6 +289,24 @@ export default function SettingsPanel({ onClose, onError, onSaved }: Props) {
             </section>
 
             <section className="settings-section">
+              <h3>Sharing</h3>
+              <div className="settings-field">
+                <span>Share server</span>
+                <input
+                  type="text"
+                  placeholder="https://musicpax.com"
+                  value={values["share.api_base"] ?? ""}
+                  onChange={(e) => update("share.api_base", e.target.value)}
+                />
+              </div>
+              <p className="settings-hint">
+                Where “Share this playlist” uploads and emails from. Leave blank
+                for musicpax.com; point it at http://localhost:3001 to test
+                against a local share server.
+              </p>
+            </section>
+
+            <section className="settings-section">
               <h3>Metadata enrichment</h3>
 
               <div className="integration-row">

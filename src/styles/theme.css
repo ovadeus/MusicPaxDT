@@ -3904,3 +3904,153 @@ input[type="range"] {
 .library-table tbody tr.missing td:not(.cap-col) {
   opacity: 0.4;
 }
+
+/* --- Share playlist ------------------------------------------------------ */
+
+/* Toolbar share button, left of the track count (matches heading-edit idiom) */
+.library-share {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-dim);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.library-share:hover {
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.share-panel {
+  max-width: 440px;
+}
+
+.share-panel .share-lede {
+  margin-top: 10px;
+}
+
+.share-input {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 10px 12px;
+  font-size: 13px;
+  font-family: inherit;
+  margin-top: 10px;
+}
+
+.share-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.share-sent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 0 0;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.share-link-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.share-link {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-dim);
+  padding: 8px 10px;
+  font-size: 12px;
+  font-family: inherit;
+}
+
+.share-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.share-copy:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+/* Playlist-row kebab menu (Rename / Share / Delete) */
+.sidebar-kebab {
+  visibility: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 0 1px;
+  border-radius: 4px;
+}
+
+.sidebar-item:hover .sidebar-kebab,
+.sidebar-kebab.open {
+  visibility: visible;
+}
+
+.sidebar-kebab:hover,
+.sidebar-kebab.open {
+  color: var(--text);
+}
+
+.sidebar-menu {
+  position: fixed;
+  transform: translateX(-100%);
+  z-index: 60;
+  min-width: 140px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar-menu button:hover {
+  background: var(--bg-hover);
+}
+
+.sidebar-menu button.danger {
+  color: var(--danger);
+}

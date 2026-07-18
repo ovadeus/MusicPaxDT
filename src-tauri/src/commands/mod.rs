@@ -1,5 +1,6 @@
 pub mod broadcast;
 pub mod enrich;
+pub mod share;
 pub mod streams;
 
 use std::collections::HashMap;

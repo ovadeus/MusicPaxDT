@@ -120,6 +120,7 @@ pub fn run() {
             commands::streams::delete_playlist,
             commands::streams::rename_playlist,
             commands::streams::import_mpx_playlist,
+            commands::share::share_playlist,
             commands::streams::youtube_search,
             commands::enrich::enrich_integration_status,
             commands::enrich::set_acoustid_key,

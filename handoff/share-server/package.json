@@ -1,0 +1,12 @@
+{
+  "name": "musicpax-share-server",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Drop-in playlist-share module for the musicpax.com app (see README.md)",
+  "type": "commonjs",
+  "main": "share.js",
+  "scripts": {
+    "test": "node --test share.test.js",
+    "start": "node standalone.js"
+  }
+}

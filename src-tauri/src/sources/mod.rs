@@ -1,5 +1,6 @@
 pub mod local;
 pub mod mpx;
+pub mod mpx_export;
 pub mod musicbrainz;
 pub mod musicpax_feed;
 pub mod wikipedia;

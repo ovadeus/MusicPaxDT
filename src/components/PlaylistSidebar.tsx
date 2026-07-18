@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { GripVertical, Plus, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { GripVertical, MoreVertical, Pencil, Plus, Share2, Trash2 } from "lucide-react";
 import type { PlaylistInfo } from "../lib/types";
 
 export type LibraryView =
@@ -17,13 +17,18 @@ interface Props {
   onPlayPlaylist: (id: number, name: string) => void;
   onCreate: (name: string) => void;
   onDelete: (id: number) => void;
+  /// Rename a playlist from the row's kebab menu (inline input).
+  onRename: (id: number, name: string) => void;
+  /// Share a playlist from the row's kebab menu.
+  onShare: (id: number, name: string) => void;
   /// Persist a new playlist order after a drag-and-drop reorder.
   onReorder: (ids: number[]) => void;
 }
 
 /// The "building" rail: every playlist can mix local OWNED files and
 /// STREAM_PLAYABLE entries; mirrored playlists land here automatically.
-/// Create/delete controls only appear in Curator mode.
+/// Each row has a kebab menu (Rename/Share/Delete — destructive and rename
+/// entries only in Curator mode); create control only appears in Curator mode.
 export default function PlaylistSidebar({
   playlists,
   view,
@@ -33,10 +38,31 @@ export default function PlaylistSidebar({
   onPlayPlaylist,
   onCreate,
   onDelete,
+  onRename,
+  onShare,
   onReorder,
 }: Props) {
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
+
+  // Kebab menu: which playlist's menu is open, anchored where (fixed coords so
+  // the dropdown never clips inside the scrolling sidebar).
+  const [menuFor, setMenuFor] = useState<{ id: number; x: number; y: number } | null>(null);
+  // Inline rename state.
+  const [renamingId, setRenamingId] = useState<number | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+  const cancelRename = useRef(false);
+
+  useEffect(() => {
+    if (!menuFor) return;
+    const close = () => setMenuFor(null);
+    window.addEventListener("click", close);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("resize", close);
+    };
+  }, [menuFor]);
 
   // Drag-and-drop reorder state.
   const [dragIndex, setDragIndex] = useState<number | null>(null);
@@ -63,6 +89,16 @@ export default function PlaylistSidebar({
     setName("");
     setCreating(false);
   };
+
+  const commitRename = (id: number) => {
+    const trimmed = renameDraft.trim();
+    setRenamingId(null);
+    if (trimmed && trimmed !== playlists.find((p) => p.id === id)?.name) {
+      onRename(id, trimmed);
+    }
+  };
+
+  const menuPlaylist = menuFor ? playlists.find((p) => p.id === menuFor.id) : undefined;
 
   return (
     <aside
@@ -119,6 +155,32 @@ export default function PlaylistSidebar({
               ? " drop-below"
               : " drop-above"
             : "";
+        if (renamingId === p.id) {
+          return (
+            <input
+              key={p.id}
+              autoFocus
+              className="sidebar-new-input"
+              value={renameDraft}
+              onChange={(e) => setRenameDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
+                else if (e.key === "Escape") {
+                  cancelRename.current = true;
+                  e.currentTarget.blur();
+                }
+              }}
+              onBlur={() => {
+                if (cancelRename.current) {
+                  cancelRename.current = false;
+                  setRenamingId(null);
+                } else {
+                  commitRename(p.id);
+                }
+              }}
+            />
+          );
+        }
         return (
           <div
             key={p.id}
@@ -149,21 +211,63 @@ export default function PlaylistSidebar({
               {p.name}
             </span>
             <span className="sidebar-count">{p.trackCount}</span>
-            {curator && (
-              <button
-                className="sidebar-delete"
-                title="Delete playlist (tracks stay in the library)"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDelete(p.id);
-                }}
-              >
-                <X size={11} />
-              </button>
-            )}
+            <button
+              className={`sidebar-kebab${menuFor?.id === p.id ? " open" : ""}`}
+              title="Playlist options"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (menuFor?.id === p.id) {
+                  setMenuFor(null);
+                } else {
+                  const r = e.currentTarget.getBoundingClientRect();
+                  setMenuFor({ id: p.id, x: r.right, y: r.bottom + 4 });
+                }
+              }}
+            >
+              <MoreVertical size={13} />
+            </button>
           </div>
         );
       })}
+
+      {menuFor && menuPlaylist && (
+        <div
+          className="sidebar-menu"
+          style={{ left: menuFor.x, top: menuFor.y }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {curator && (
+            <button
+              onClick={() => {
+                setRenameDraft(menuPlaylist.name);
+                setRenamingId(menuPlaylist.id);
+                setMenuFor(null);
+              }}
+            >
+              <Pencil size={13} /> Rename
+            </button>
+          )}
+          <button
+            onClick={() => {
+              onShare(menuPlaylist.id, menuPlaylist.name);
+              setMenuFor(null);
+            }}
+          >
+            <Share2 size={13} /> Share
+          </button>
+          {curator && (
+            <button
+              className="danger"
+              onClick={() => {
+                onDelete(menuPlaylist.id);
+                setMenuFor(null);
+              }}
+            >
+              <Trash2 size={13} /> Delete
+            </button>
+          )}
+        </div>
+      )}
     </aside>
   );
 }

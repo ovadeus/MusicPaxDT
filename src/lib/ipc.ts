@@ -447,6 +447,25 @@ export function importMpxPlaylist(path: string): Promise<MpxImportReport> {
   return invoke<MpxImportReport>("import_mpx_playlist", { path });
 }
 
+export interface ShareReport {
+  shareUrl: string;
+  trackCount: number;
+  excludedLocal: number;
+}
+
+/// Share a playlist: the server stores it as .mpx and emails the friend a link.
+export function sharePlaylist(
+  playlistId: number,
+  recipientEmail: string,
+  senderName?: string,
+): Promise<ShareReport> {
+  return invoke<ShareReport>("share_playlist", {
+    playlistId,
+    recipientEmail,
+    senderName: senderName ?? null,
+  });
+}
+
 export function radioTop(limit?: number): Promise<RadioStation[]> {
   return invoke<RadioStation[]>("radio_top", { limit: limit ?? null });
 }

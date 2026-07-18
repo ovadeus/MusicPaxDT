@@ -9,6 +9,7 @@ import {
   Music,
   Pencil,
   RadioTower,
+  Share2,
   Sparkles,
   Square,
   SquarePlay,
@@ -46,6 +47,8 @@ interface Props {
   missingIds?: Set<number>;
   /// Relink a missing local file (opens a file picker).
   onRelink?: (track: Track) => void;
+  /// Share the current playlist (shows a share icon left of the track count).
+  onShare?: () => void;
 }
 
 /// Icon per capability, refined by source (YouTube streams get the YouTube
@@ -188,6 +191,7 @@ export default function LibraryTable(props: Props) {
     fadeKey,
     missingIds,
     onRelink,
+    onShare,
   } = props;
 
   const [editingHeading, setEditingHeading] = useState(false);
@@ -314,6 +318,15 @@ export default function LibraryTable(props: Props) {
             <LayoutGrid size={16} />
           </button>
         </div>
+        {onShare && (
+          <button
+            className="library-share"
+            title="Share this playlist"
+            onClick={onShare}
+          >
+            <Share2 size={15} />
+          </button>
+        )}
         <span className="track-count">
           {tracks.length} track{tracks.length === 1 ? "" : "s"}
         </span>
