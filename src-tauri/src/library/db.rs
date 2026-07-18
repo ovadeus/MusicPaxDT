@@ -100,6 +100,23 @@ fn migrate(conn: &Connection) -> AppResult<()> {
         tx.pragma_update(None, "user_version", 4)?;
         tx.commit()?;
     }
+    if version < 5 {
+        // Playlist folders: single-level grouping for the sidebar. A playlist's
+        // folder_id is NULL for ungrouped ("root") playlists; deleting a folder
+        // moves its playlists back to root, never deletes them.
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "CREATE TABLE playlist_folders(
+                 id INTEGER PRIMARY KEY,
+                 name TEXT NOT NULL,
+                 position INTEGER NOT NULL DEFAULT 0,
+                 collapsed INTEGER NOT NULL DEFAULT 0
+             );
+             ALTER TABLE playlists ADD COLUMN folder_id INTEGER;",
+        )?;
+        tx.pragma_update(None, "user_version", 5)?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
@@ -428,10 +445,10 @@ pub fn reorder_playlists(conn: &Connection, ids: &[i64]) -> AppResult<()> {
 
 pub fn list_playlists(conn: &Connection) -> AppResult<Vec<crate::library::model::PlaylistInfo>> {
     let mut stmt = conn.prepare(
-        "SELECT p.id, p.name, COUNT(pi.track_id)
+        "SELECT p.id, p.name, COUNT(pi.track_id), p.folder_id
          FROM playlists p
          LEFT JOIN playlist_items pi ON pi.playlist_id = p.id
-         GROUP BY p.id, p.name, p.position
+         GROUP BY p.id, p.name, p.position, p.folder_id
          ORDER BY p.position, p.id",
     )?;
     let rows = stmt.query_map([], |r| {
@@ -439,6 +456,7 @@ pub fn list_playlists(conn: &Connection) -> AppResult<Vec<crate::library::model:
             id: r.get(0)?,
             name: r.get(1)?,
             track_count: r.get(2)?,
+            folder_id: r.get(3)?,
         })
     })?;
     let mut playlists = Vec::new();
@@ -446,6 +464,104 @@ pub fn list_playlists(conn: &Connection) -> AppResult<Vec<crate::library::model:
         playlists.push(row?);
     }
     Ok(playlists)
+}
+
+// ---------------------------------------------------------------------------
+// Playlist folders: single-level sidebar grouping. Deleting a folder ungroups
+// its playlists (folder_id → NULL) — playlists are never deleted with it.
+// ---------------------------------------------------------------------------
+
+pub fn list_folders(conn: &Connection) -> AppResult<Vec<crate::library::model::FolderInfo>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, name, position, collapsed FROM playlist_folders
+         ORDER BY position, id",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(crate::library::model::FolderInfo {
+            id: r.get(0)?,
+            name: r.get(1)?,
+            position: r.get(2)?,
+            collapsed: r.get::<_, i64>(3)? != 0,
+        })
+    })?;
+    let mut folders = Vec::new();
+    for row in rows {
+        folders.push(row?);
+    }
+    Ok(folders)
+}
+
+pub fn create_folder(conn: &Connection, name: &str) -> AppResult<i64> {
+    conn.execute(
+        "INSERT INTO playlist_folders(name, position)
+         VALUES (?1, (SELECT COALESCE(MAX(position), -1) + 1 FROM playlist_folders))",
+        [name.trim()],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn rename_folder(conn: &Connection, folder_id: i64, name: &str) -> AppResult<()> {
+    conn.execute(
+        "UPDATE playlist_folders SET name = ?2 WHERE id = ?1",
+        params![folder_id, name.trim()],
+    )?;
+    Ok(())
+}
+
+pub fn delete_folder(conn: &Connection, folder_id: i64) -> AppResult<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "UPDATE playlists SET folder_id = NULL WHERE folder_id = ?1",
+        [folder_id],
+    )?;
+    tx.execute("DELETE FROM playlist_folders WHERE id = ?1", [folder_id])?;
+    tx.commit()?;
+    Ok(())
+}
+
+pub fn set_folder_collapsed(conn: &Connection, folder_id: i64, collapsed: bool) -> AppResult<()> {
+    conn.execute(
+        "UPDATE playlist_folders SET collapsed = ?2 WHERE id = ?1",
+        params![folder_id, collapsed as i64],
+    )?;
+    Ok(())
+}
+
+/// Move a playlist into a folder (or out, with None). Validates the folder
+/// exists so a stale id can't strand the playlist in an invisible group.
+pub fn move_playlist_to_folder(
+    conn: &Connection,
+    playlist_id: i64,
+    folder_id: Option<i64>,
+) -> AppResult<()> {
+    if let Some(fid) = folder_id {
+        let exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM playlist_folders WHERE id = ?1",
+            [fid],
+            |r| r.get(0),
+        )?;
+        if exists == 0 {
+            return Err(AppError::Other("folder not found".into()));
+        }
+    }
+    conn.execute(
+        "UPDATE playlists SET folder_id = ?2 WHERE id = ?1",
+        params![playlist_id, folder_id],
+    )?;
+    Ok(())
+}
+
+/// Persist a new folder order (the id list in display order → positions).
+pub fn reorder_folders(conn: &Connection, ids: &[i64]) -> AppResult<()> {
+    let tx = conn.unchecked_transaction()?;
+    for (i, id) in ids.iter().enumerate() {
+        tx.execute(
+            "UPDATE playlist_folders SET position = ?1 WHERE id = ?2",
+            params![i as i64, id],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 pub fn playlist_tracks(conn: &Connection, playlist_id: i64) -> AppResult<Vec<Track>> {
@@ -534,12 +650,49 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 4);
+        assert_eq!(version, 5);
         // FTS5 table exists and is queryable
         let count: i64 = conn
             .query_row("SELECT count(*) FROM tracks_fts", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn folders_group_rename_collapse_and_ungroup_on_delete() {
+        let conn = mem_db();
+        let p1 = create_playlist(&conn, "Rock").unwrap();
+        let p2 = create_playlist(&conn, "Jazz").unwrap();
+
+        let f = create_folder(&conn, "Genres").unwrap();
+        move_playlist_to_folder(&conn, p1, Some(f)).unwrap();
+        move_playlist_to_folder(&conn, p2, Some(f)).unwrap();
+        // A bogus folder id must be rejected, not silently strand the playlist.
+        assert!(move_playlist_to_folder(&conn, p1, Some(9999)).is_err());
+
+        let playlists = list_playlists(&conn).unwrap();
+        assert!(playlists.iter().all(|p| p.folder_id == Some(f)));
+
+        rename_folder(&conn, f, "  Styles  ").unwrap();
+        set_folder_collapsed(&conn, f, true).unwrap();
+        let folders = list_folders(&conn).unwrap();
+        assert_eq!(folders.len(), 1);
+        assert_eq!(folders[0].name, "Styles"); // trimmed
+        assert!(folders[0].collapsed);
+
+        // Deleting the folder ungroups, never deletes, its playlists.
+        delete_folder(&conn, f).unwrap();
+        assert!(list_folders(&conn).unwrap().is_empty());
+        let playlists = list_playlists(&conn).unwrap();
+        assert_eq!(playlists.len(), 2);
+        assert!(playlists.iter().all(|p| p.folder_id.is_none()));
+
+        // Folder reorder persists positions.
+        let f1 = create_folder(&conn, "A").unwrap();
+        let f2 = create_folder(&conn, "B").unwrap();
+        reorder_folders(&conn, &[f2, f1]).unwrap();
+        let names: Vec<String> = list_folders(&conn).unwrap().into_iter().map(|x| x.name).collect();
+        assert_eq!(names, ["B", "A"]);
     }
 
     #[test]

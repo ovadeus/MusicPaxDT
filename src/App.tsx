@@ -48,6 +48,7 @@ import type {
   MediaType,
   NowPlaying,
   PlaybackState,
+  FolderInfo,
   PlaylistInfo,
   RadioStation,
   RecordingState,
@@ -97,6 +98,7 @@ export default function App() {
   // Cleared by selecting anything in the sidebar (e.g. "All Tracks").
   const [artistFilter, setArtistFilter] = useState<string | null>(null);
   const [playlists, setPlaylists] = useState<PlaylistInfo[]>([]);
+  const [folders, setFolders] = useState<FolderInfo[]>([]);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortSpec>({ field: "added_at", dir: "desc" });
   const [mediaTypeFilter, setMediaTypeFilter] = useState<MediaType | null>(null);
@@ -278,7 +280,12 @@ export default function App() {
 
   const refreshPlaylists = useCallback(async () => {
     try {
-      setPlaylists(await ipc.listPlaylists());
+      const [lists, dirs] = await Promise.all([
+        ipc.listPlaylists(),
+        ipc.listPlaylistFolders(),
+      ]);
+      setPlaylists(lists);
+      setFolders(dirs);
     } catch (e) {
       showStatus(`Failed to load playlists: ${e}`);
     }
@@ -988,6 +995,7 @@ export default function App() {
         <div className="library-layout">
           <PlaylistSidebar
             playlists={playlists}
+            folders={folders}
             view={view}
             curator={curator}
             width={sidebarWidth}
@@ -1026,11 +1034,63 @@ export default function App() {
                 .catch((e) => showStatus(`${e}`));
             }}
             onShare={(id, name) => setShareTarget({ id, name })}
-            onReorder={(ids) => {
-              // Optimistic reorder, then persist + reconcile.
-              setPlaylists((prev) => ids.flatMap((id) => prev.filter((p) => p.id === id)));
+            onRowDrop={(playlistId, folderId, orderedIds) => {
+              // Optimistic: re-home + reorder locally, then persist + reconcile.
+              setPlaylists((prev) =>
+                orderedIds.flatMap((id) =>
+                  prev
+                    .filter((p) => p.id === id)
+                    .map((p) => (p.id === playlistId ? { ...p, folderId } : p)),
+                ),
+              );
+              const moved = playlists.find((p) => p.id === playlistId);
+              const home =
+                moved && (moved.folderId ?? null) !== folderId
+                  ? ipc.movePlaylistToFolder(playlistId, folderId)
+                  : Promise.resolve();
+              home
+                .then(() => ipc.reorderPlaylists(orderedIds))
+                .then(refreshPlaylists)
+                .catch((e) => showStatus(`${e}`));
+            }}
+            onMoveToFolder={(playlistId, folderId) => {
               ipc
-                .reorderPlaylists(ids)
+                .movePlaylistToFolder(playlistId, folderId)
+                .then(refreshPlaylists)
+                .catch((e) => showStatus(`${e}`));
+            }}
+            onCreateFolder={(name) => {
+              ipc
+                .createPlaylistFolder(name)
+                .then(refreshPlaylists)
+                .catch((e) => showStatus(`${e}`));
+            }}
+            onRenameFolder={(id, name) => {
+              ipc
+                .renamePlaylistFolder(id, name)
+                .then(refreshPlaylists)
+                .catch((e) => showStatus(`${e}`));
+            }}
+            onDeleteFolder={(id) => {
+              ipc
+                .deletePlaylistFolder(id)
+                .then(() => {
+                  refreshPlaylists();
+                  showStatus("Folder deleted — its playlists are back in the list");
+                })
+                .catch((e) => showStatus(`${e}`));
+            }}
+            onToggleFolder={(id, collapsed) => {
+              // Optimistic toggle; persistence is fire-and-forget.
+              setFolders((prev) =>
+                prev.map((f) => (f.id === id ? { ...f, collapsed } : f)),
+              );
+              ipc.setFolderCollapsed(id, collapsed).catch(() => {});
+            }}
+            onReorderFolders={(ids) => {
+              setFolders((prev) => ids.flatMap((id) => prev.filter((f) => f.id === id)));
+              ipc
+                .reorderPlaylistFolders(ids)
                 .then(refreshPlaylists)
                 .catch((e) => showStatus(`${e}`));
             }}

@@ -627,6 +627,110 @@ pub async fn reorder_playlists(ids: Vec<i64>, state: State<'_, AppState>) -> App
     .map_err(|e| AppError::Other(format!("reorder task failed: {e}")))?
 }
 
+// ---------------------------------------------------------------------------
+// Playlist folders (sidebar grouping)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn list_playlist_folders(
+    state: State<'_, AppState>,
+) -> AppResult<Vec<crate::library::model::FolderInfo>> {
+    let db_arc = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = lock_unpoisoned(&db_arc);
+        db::list_folders(&conn)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("folders task failed: {e}")))?
+}
+
+#[tauri::command]
+pub async fn create_playlist_folder(name: String, state: State<'_, AppState>) -> AppResult<i64> {
+    let trimmed = name.trim().to_string();
+    if trimmed.is_empty() {
+        return Err(AppError::Other("Folder name can't be empty".into()));
+    }
+    let db_arc = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = lock_unpoisoned(&db_arc);
+        db::create_folder(&conn, &trimmed)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("create-folder task failed: {e}")))?
+}
+
+#[tauri::command]
+pub async fn rename_playlist_folder(
+    folder_id: i64,
+    name: String,
+    state: State<'_, AppState>,
+) -> AppResult<()> {
+    let trimmed = name.trim().to_string();
+    if trimmed.is_empty() {
+        return Err(AppError::Other("Folder name can't be empty".into()));
+    }
+    let db_arc = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = lock_unpoisoned(&db_arc);
+        db::rename_folder(&conn, folder_id, &trimmed)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("rename-folder task failed: {e}")))?
+}
+
+/// Delete a folder: its playlists move back to the sidebar root (never deleted).
+#[tauri::command]
+pub async fn delete_playlist_folder(folder_id: i64, state: State<'_, AppState>) -> AppResult<()> {
+    let db_arc = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = lock_unpoisoned(&db_arc);
+        db::delete_folder(&conn, folder_id)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("delete-folder task failed: {e}")))?
+}
+
+#[tauri::command]
+pub async fn set_folder_collapsed(
+    folder_id: i64,
+    collapsed: bool,
+    state: State<'_, AppState>,
+) -> AppResult<()> {
+    let db_arc = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = lock_unpoisoned(&db_arc);
+        db::set_folder_collapsed(&conn, folder_id, collapsed)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("collapse task failed: {e}")))?
+}
+
+#[tauri::command]
+pub async fn move_playlist_to_folder(
+    playlist_id: i64,
+    folder_id: Option<i64>,
+    state: State<'_, AppState>,
+) -> AppResult<()> {
+    let db_arc = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = lock_unpoisoned(&db_arc);
+        db::move_playlist_to_folder(&conn, playlist_id, folder_id)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("move-to-folder task failed: {e}")))?
+}
+
+#[tauri::command]
+pub async fn reorder_playlist_folders(ids: Vec<i64>, state: State<'_, AppState>) -> AppResult<()> {
+    let db_arc = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = lock_unpoisoned(&db_arc);
+        db::reorder_folders(&conn, &ids)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("reorder-folders task failed: {e}")))?
+}
+
 #[tauri::command]
 pub async fn add_to_playlist(
     playlist_id: i64,

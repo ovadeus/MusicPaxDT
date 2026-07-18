@@ -98,6 +98,16 @@ export interface PlaylistInfo {
   id: number;
   name: string;
   trackCount: number;
+  /// Folder this playlist lives in; null = ungrouped (sidebar root).
+  folderId: number | null;
+}
+
+/// A sidebar playlist folder (single-level grouping).
+export interface FolderInfo {
+  id: number;
+  name: string;
+  position: number;
+  collapsed: boolean;
 }
 
 export interface MirrorReport {

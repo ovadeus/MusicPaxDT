@@ -10,6 +10,7 @@ import type {
   EnrichIntegrationStatus,
   EnrichProgress,
   EnrichProposeReport,
+  FolderInfo,
   ImportResult,
   IntegrationStatus,
   LineInSource,
@@ -432,6 +433,40 @@ export function renamePlaylist(playlistId: number, name: string): Promise<void> 
 /// Persist a drag-and-drop playlist order (ids in display order).
 export function reorderPlaylists(ids: number[]): Promise<void> {
   return invoke<void>("reorder_playlists", { ids });
+}
+
+// --- Playlist folders (sidebar grouping) -----------------------------------
+
+export function listPlaylistFolders(): Promise<FolderInfo[]> {
+  return invoke<FolderInfo[]>("list_playlist_folders");
+}
+
+export function createPlaylistFolder(name: string): Promise<number> {
+  return invoke<number>("create_playlist_folder", { name });
+}
+
+export function renamePlaylistFolder(folderId: number, name: string): Promise<void> {
+  return invoke<void>("rename_playlist_folder", { folderId, name });
+}
+
+/// Delete a folder — its playlists move back to the sidebar root.
+export function deletePlaylistFolder(folderId: number): Promise<void> {
+  return invoke<void>("delete_playlist_folder", { folderId });
+}
+
+export function setFolderCollapsed(folderId: number, collapsed: boolean): Promise<void> {
+  return invoke<void>("set_folder_collapsed", { folderId, collapsed });
+}
+
+export function movePlaylistToFolder(
+  playlistId: number,
+  folderId: number | null,
+): Promise<void> {
+  return invoke<void>("move_playlist_to_folder", { playlistId, folderId });
+}
+
+export function reorderPlaylistFolders(ids: number[]): Promise<void> {
+  return invoke<void>("reorder_playlist_folders", { ids });
 }
 
 export interface MpxImportReport {

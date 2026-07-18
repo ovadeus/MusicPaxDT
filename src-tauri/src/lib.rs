@@ -61,6 +61,11 @@ pub fn run() {
                 .title("MUSICPAX")
                 .inner_size(1280.0, 800.0)
                 .min_inner_size(1080.0, 720.0)
+                // Tauri's native drag-drop handler intercepts all drag events in
+                // the webview, silently breaking HTML5 drag-and-drop (playlist
+                // reorder). We never use tauri://drag-drop (imports go through
+                // dialog pickers), so hand DnD back to the page.
+                .disable_drag_drop_handler()
                 .build()?;
             Ok(())
         })
@@ -116,6 +121,13 @@ pub fn run() {
             commands::streams::create_playlist,
             commands::streams::playlist_tracks,
             commands::streams::reorder_playlists,
+            commands::streams::list_playlist_folders,
+            commands::streams::create_playlist_folder,
+            commands::streams::rename_playlist_folder,
+            commands::streams::delete_playlist_folder,
+            commands::streams::set_folder_collapsed,
+            commands::streams::move_playlist_to_folder,
+            commands::streams::reorder_playlist_folders,
             commands::streams::add_to_playlist,
             commands::streams::delete_playlist,
             commands::streams::rename_playlist,

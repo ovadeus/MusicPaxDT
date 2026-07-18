@@ -78,6 +78,18 @@ pub struct PlaylistInfo {
     pub id: i64,
     pub name: String,
     pub track_count: i64,
+    /// Folder this playlist lives in; None = ungrouped (sidebar root).
+    pub folder_id: Option<i64>,
+}
+
+/// A sidebar playlist folder (single-level grouping).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderInfo {
+    pub id: i64,
+    pub name: String,
+    pub position: i64,
+    pub collapsed: bool,
 }
 
 /// A proposed metadata fill from an enrichment source (MusicBrainz, AcoustID,
