@@ -30,10 +30,15 @@ export default function TrackEditModal({
   const [year, setYear] = useState(track.year != null ? String(track.year) : "");
   const [genre, setGenre] = useState(track.genre ?? "");
   const [mediaType, setMediaType] = useState<MediaType>(track.mediaType ?? "music");
+  const [uri, setUri] = useState(track.uri);
   const [busy, setBusy] = useState(false);
   const [looking, setLooking] = useState(false);
 
   const writesToFile = track.capability === "OWNED" && track.sourceKind === "local";
+  // Only STREAM_PLAYABLE YouTube tracks expose an editable source URL — paste a
+  // different video to swap it (e.g. a dead/region-blocked video, or a better
+  // match). The embed reads the id straight off the uri, so the swap is live.
+  const isYouTube = track.capability === "STREAM_PLAYABLE" && track.sourceKind === "youtube";
 
   // Fill in missing tags for THIS track from the open-source enrichment chain
   // (free MusicBrainz / AcoustID fingerprint first, AI only if configured).
@@ -94,6 +99,8 @@ export default function TrackEditModal({
         year: parsedYear != null && !Number.isNaN(parsedYear) ? parsedYear : null,
         genre: genre.trim() || null,
         mediaType,
+        // Only send a uri swap for YouTube; blank leaves it unchanged.
+        ...(isYouTube && uri.trim() ? { uri: uri.trim() } : {}),
       });
       onSaved(updated);
       onClose();
@@ -178,6 +185,19 @@ export default function TrackEditModal({
           </select>
         </label>
 
+        {isYouTube && (
+          <label className="edit-field">
+            <span>YouTube URL</span>
+            <input
+              value={uri}
+              onChange={(e) => setUri(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && save()}
+              placeholder="https://www.youtube.com/watch?v=…"
+              spellCheck={false}
+            />
+          </label>
+        )}
+
         <div className="edit-actions">
           <button className="delete-button" onClick={remove} disabled={busy}>
             <Trash2 size={14} /> Delete
@@ -190,7 +210,9 @@ export default function TrackEditModal({
         <p className="settings-hint">
           {writesToFile
             ? "Changes are saved to the library and written into the file's tags."
-            : "Changes update the library entry (streams have no file to tag)."}
+            : isYouTube
+              ? "Changes update the library entry. Paste a different YouTube URL to swap the video."
+              : "Changes update the library entry (streams have no file to tag)."}
         </p>
       </div>
     </div>

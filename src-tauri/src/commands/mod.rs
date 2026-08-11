@@ -176,10 +176,38 @@ pub async fn update_track_metadata(
     year: Option<i64>,
     genre: Option<String>,
     media_type: Option<String>,
+    uri: Option<String>,
     state: State<'_, AppState>,
 ) -> AppResult<Track> {
     let db = state.db.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        // A blank/absent uri means "leave it"; a present one must be a real
+        // YouTube URL, which we normalize to a canonical watch URL so the embed
+        // (which reads the video id straight off the uri) plays the new video.
+        let uri = match uri.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            Some(u) => Some(
+                crate::sources::youtube::parse_video_id(u)
+                    .map(|id| crate::sources::youtube::watch_url(&id))
+                    .ok_or_else(|| {
+                        AppError::Other("Not a valid YouTube video URL".to_string())
+                    })?,
+            ),
+            None => None,
+        };
+        let conn = lock_unpoisoned(&db);
+        // Only STREAM_PLAYABLE YouTube tracks may have their source swapped —
+        // never rewrite a local file's path or another source's URI this way.
+        if uri.is_some() {
+            let existing = db::get_track(&conn, track_id)?;
+            if existing.source_kind != "youtube" {
+                return Err(AppError::Other(
+                    "The source URL can only be changed for YouTube tracks".to_string(),
+                ));
+            }
+            // Swapping the video: drop any stale cached cover so the grid and
+            // Now Playing derive the new video's thumbnail from the new uri.
+            db::clear_track_art_path(&conn, track_id)?;
+        }
         let edit = db::TrackEdit {
             title,
             artist,
@@ -187,8 +215,8 @@ pub async fn update_track_metadata(
             year,
             genre,
             media_type,
+            uri,
         };
-        let conn = lock_unpoisoned(&db);
         let track = db::update_track_metadata(&conn, track_id, &edit)?;
         // Persist to the file itself for owned local audio.
         if track.capability == Capability::Owned && track.source_kind == "local" {
@@ -198,6 +226,30 @@ pub async fn update_track_metadata(
     })
     .await
     .map_err(|e| AppError::Other(format!("metadata task failed: {e}")))?
+}
+
+/// Favorite / unfavorite a track (stored as rating >= 1). Powers the heart
+/// toggle in the library and the "My Favorites" view.
+#[tauri::command]
+pub async fn set_track_favorite(
+    track_id: i64,
+    favorite: bool,
+    state: State<'_, AppState>,
+) -> AppResult<()> {
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = lock_unpoisoned(&db);
+        db::set_track_favorite(&conn, track_id, favorite)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("favorite task failed: {e}")))?
+}
+
+/// Publish the current track + play state to the OS Now Playing surface
+/// (macOS Control Center / media keys / lock screen). No-op off macOS.
+#[tauri::command]
+pub fn set_now_playing(app: AppHandle, meta: crate::now_playing::NowPlayingMeta) {
+    crate::now_playing::update(&app, meta);
 }
 
 /// Remove a track from the library (and any playlists). The audio file on disk
@@ -211,6 +263,19 @@ pub async fn delete_track(track_id: i64, state: State<'_, AppState>) -> AppResul
     })
     .await
     .map_err(|e| AppError::Other(format!("delete task failed: {e}")))?
+}
+
+/// Remove several tracks from the library in one batch (single transaction).
+/// The audio files on disk are left untouched. Returns the number deleted.
+#[tauri::command]
+pub async fn delete_tracks(track_ids: Vec<i64>, state: State<'_, AppState>) -> AppResult<usize> {
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = lock_unpoisoned(&db);
+        db::delete_tracks(&conn, &track_ids)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("bulk delete task failed: {e}")))?
 }
 
 #[tauri::command]
@@ -254,6 +319,24 @@ pub async fn load_track(track_id: i64, state: State<'_, AppState>) -> AppResult<
     })
     .await
     .map_err(|e| AppError::Audio(format!("load task failed: {e}")))?
+}
+
+/// Record a user-initiated play for tracks that are rendered in the webview
+/// (YouTube/radio/direct streams). OWNED tracks record inside `load_track`,
+/// after the decoder accepts the file.
+#[tauri::command]
+pub async fn record_play(track_id: i64, state: State<'_, AppState>) -> AppResult<()> {
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let played_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let conn = lock_unpoisoned(&db);
+        db::record_play(&conn, track_id, played_at)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("record play task failed: {e}")))?
 }
 
 #[tauri::command]

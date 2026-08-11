@@ -189,6 +189,7 @@ export type SortField =
   | "genre"
   | "year"
   | "duration_ms"
+  | "play_count"
   | "added_at";
 
 export interface SortSpec {

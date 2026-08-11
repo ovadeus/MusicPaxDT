@@ -12,6 +12,10 @@ interface Props {
   onTime: (positionMs: number, durationMs: number) => void;
   onEnded: () => void;
   onClose: () => void;
+  /// The embed reported the current video is unplayable (removed / private /
+  /// embed-disabled / region-blocked). Fired once per video so the app can
+  /// auto-heal by re-resolving to a working replacement.
+  onFatalError?: (videoId: string) => void;
   /// When set, the player fills this measured rect (theater / in-app fullscreen)
   /// instead of the small floating box. The iframe is never remounted, so
   /// playback is uninterrupted.
@@ -52,6 +56,9 @@ export default function StreamPlayer(props: Props) {
   // (and the all-important "ended" events) survive across a playlist.
   const initialVideoRef = useRef(videoId);
   const loadedRef = useRef<string | null>(videoId);
+  // Which video we've already reported as failed, so onError fires the app's
+  // auto-heal at most once per video (avoids repeat calls while it re-resolves).
+  const erroredRef = useRef<string | null>(null);
 
   const post = (func: string, args: unknown[] = []) => {
     iframeRef.current?.contentWindow?.postMessage(
@@ -81,7 +88,15 @@ export default function StreamPlayer(props: Props) {
           post("playVideo");
         }
       }
-      if (data.event === "onStateChange" && typeof data.info === "number") {
+      if (data.event === "onError" && typeof data.info === "number") {
+        // 2 = bad id, 100 = removed/private, 101/150 = embedding disabled or
+        // region-blocked. All mean this video won't play — ask for a re-resolve.
+        const current = loadedRef.current;
+        if ([2, 100, 101, 150].includes(data.info) && current && erroredRef.current !== current) {
+          erroredRef.current = current;
+          cbRef.current.onFatalError?.(current);
+        }
+      } else if (data.event === "onStateChange" && typeof data.info === "number") {
         if (data.info === 0) cbRef.current.onEnded();
         else if (data.info === 1) cbRef.current.onPlayingChange(true);
         else if (data.info === 2) cbRef.current.onPlayingChange(false);
@@ -130,6 +145,7 @@ export default function StreamPlayer(props: Props) {
   useEffect(() => {
     if (!videoId || loadedRef.current === videoId) return;
     loadedRef.current = videoId;
+    erroredRef.current = null; // a fresh video may fail on its own merits
     if (readyRef.current) post("loadVideoById", [videoId]);
   }, [videoId]);
 

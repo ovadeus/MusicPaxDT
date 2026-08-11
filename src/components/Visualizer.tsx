@@ -1,9 +1,30 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { SlidersHorizontal } from "lucide-react";
 import AudioMotionAnalyzer from "audiomotion-analyzer";
 import * as ipc from "../lib/ipc";
 import * as streamMeter from "../lib/streamMeter";
+import type { AudioDevice } from "../lib/types";
 import type { VizSettings } from "../lib/vizSettings";
+
+// Sentinel select value for the no-install ScreenCaptureKit path.
+const SCREEN = "__screen__";
+// Names that look like a system-output loopback, used to pre-select a good
+// default capture device.
+const LOOPBACK_HINTS = [
+  "blackhole",
+  "loopback",
+  "soundflower",
+  "vb-audio",
+  "vb-cable",
+  "voicemeeter",
+  "stereo mix",
+  "aggregate",
+  "multi-output",
+  "wave link",
+  "ark",
+  "audio routing",
+  "soundsource",
+];
 
 interface Props {
   settings: VizSettings;
@@ -12,8 +33,10 @@ interface Props {
   /// True when a system-audio loopback capture is feeding `audio-spectrum`
   /// (overrides noAudio — renders the spectrum instead of the notice).
   systemCapture?: boolean;
-  /// Start system-audio capture (clicked from the YouTube notice).
-  onSystemAudio?: () => void;
+  /// Start system-audio capture from the YouTube notice. `device` is an audio
+  /// input name to capture (permission-free loopback), or `null` for the
+  /// no-install ScreenCaptureKit path.
+  onSystemAudio?: (device: string | null) => void;
   /// Feedback from the capture attempt (setup guide / error), shown in-overlay.
   captureMsg?: string | null;
   /// Settings-board toggle (lives bottom-right so the header stays stable).
@@ -76,6 +99,29 @@ export default function Visualizer({
   const mountRef = useRef<HTMLDivElement | null>(null);
   const amRef = useRef<AudioMotionAnalyzer | null>(null);
   const gainsRef = useRef<GainNode[] | null>(null);
+
+  // Capture-source picker (only relevant on the YouTube "unavailable" notice):
+  // list audio inputs so the user can pick a loopback device explicitly.
+  const [captureDevices, setCaptureDevices] = useState<AudioDevice[]>([]);
+  const [captureTarget, setCaptureTarget] = useState<string>(SCREEN);
+  const showNotice = !!noAudio && !systemCapture;
+  useEffect(() => {
+    if (!showNotice) return;
+    let alive = true;
+    ipc
+      .getAudioInputDevices()
+      .then((ds) => {
+        if (!alive) return;
+        setCaptureDevices(ds);
+        // Pre-select a loopback-looking device if present, else ScreenCaptureKit.
+        const match = ds.find((d) => LOOPBACK_HINTS.some((h) => d.name.toLowerCase().includes(h)));
+        setCaptureTarget(match ? match.name : SCREEN);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [showNotice]);
 
   useEffect(() => {
     const el = mountRef.current;
@@ -170,12 +216,34 @@ export default function Visualizer({
         <div className="viz-unavailable">
           <p className="viz-unavailable-title">Visualizer unavailable for YouTube</p>
           <p className="viz-unavailable-sub">
-            YouTube's audio plays in a sandboxed embed we can't read directly. You can
-            visualize it by capturing your system audio output instead.
+            YouTube's audio plays in a sandboxed embed we can't read directly. Pick a
+            capture source to visualize your system output instead.
           </p>
-          <button className="viz-sysaudio-btn" onClick={onSystemAudio}>
-            Visualize system audio
-          </button>
+          <div className="viz-capture-row">
+            <select
+              className="viz-capture-select"
+              value={captureTarget}
+              onChange={(e) => setCaptureTarget(e.target.value)}
+              title="Capture source"
+            >
+              <option value={SCREEN}>System audio — no install (Screen Recording)</option>
+              {captureDevices.map((d) => (
+                <option key={d.id} value={d.name}>
+                  {d.name}
+                </option>
+              ))}
+            </select>
+            <button
+              className="viz-sysaudio-btn"
+              onClick={() => onSystemAudio?.(captureTarget === SCREEN ? null : captureTarget)}
+            >
+              Start capture
+            </button>
+          </div>
+          <p className="viz-capture-tip">
+            No loopback device? Route your output through BlackHole, Loopback, ARK, or a
+            macOS Aggregate/Multi-Output device, then pick it here — no permission needed.
+          </p>
           {captureMsg && <pre className="viz-capture-msg">{captureMsg}</pre>}
         </div>
       )}

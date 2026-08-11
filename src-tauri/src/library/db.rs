@@ -201,6 +201,10 @@ pub struct TrackEdit {
     pub genre: Option<String>,
     /// media_type override; None leaves the current value untouched (NOT NULL).
     pub media_type: Option<String>,
+    /// Source URI override (e.g. swapping a STREAM_PLAYABLE YouTube video).
+    /// None leaves the current value untouched (NOT NULL); the caller is
+    /// responsible for validating/normalizing before it reaches here.
+    pub uri: Option<String>,
 }
 
 pub fn update_track_metadata(conn: &Connection, id: i64, edit: &TrackEdit) -> AppResult<Track> {
@@ -214,7 +218,7 @@ pub fn update_track_metadata(conn: &Connection, id: i64, edit: &TrackEdit) -> Ap
         .filter(|v| !v.is_empty());
     let changed = conn.execute(
         "UPDATE tracks SET title = ?1, artist = ?2, album = ?3, year = ?4, genre = ?5,
-            media_type = COALESCE(?6, media_type) WHERE id = ?7",
+            media_type = COALESCE(?6, media_type), uri = COALESCE(?7, uri) WHERE id = ?8",
         params![
             blank_to_null(&edit.title),
             blank_to_null(&edit.artist),
@@ -222,6 +226,7 @@ pub fn update_track_metadata(conn: &Connection, id: i64, edit: &TrackEdit) -> Ap
             edit.year,
             blank_to_null(&edit.genre),
             media_type,
+            edit.uri,
             id
         ],
     )?;
@@ -238,6 +243,7 @@ const SORTABLE: &[(&str, &str)] = &[
     ("genre", "genre COLLATE NOCASE"),
     ("year", "year"),
     ("duration_ms", "duration_ms"),
+    ("play_count", "play_count"),
     ("added_at", "added_at"),
 ];
 
@@ -377,6 +383,23 @@ pub fn delete_track(conn: &Connection, id: i64) -> AppResult<()> {
     Ok(())
 }
 
+/// Remove several tracks in one transaction (reuses the per-id reference
+/// cleanup). Missing ids are skipped rather than aborting the batch. Returns
+/// the number of track rows actually deleted. Audio files are left untouched.
+pub fn delete_tracks(conn: &Connection, ids: &[i64]) -> AppResult<usize> {
+    let tx = conn.unchecked_transaction()?;
+    let mut deleted = 0usize;
+    for &id in ids {
+        tx.execute("DELETE FROM playlist_items WHERE track_id = ?1", [id])?;
+        tx.execute("DELETE FROM crate_items WHERE track_id = ?1", [id])?;
+        tx.execute("DELETE FROM cues WHERE track_id = ?1", [id])?;
+        tx.execute("DELETE FROM history WHERE track_id = ?1", [id])?;
+        deleted += tx.execute("DELETE FROM tracks WHERE id = ?1", [id])?;
+    }
+    tx.commit()?;
+    Ok(deleted)
+}
+
 pub fn set_track_musicbrainz_id(conn: &Connection, id: i64, mbid: &str) -> AppResult<()> {
     conn.execute(
         "UPDATE tracks SET musicbrainz_id = ?1 WHERE id = ?2",
@@ -390,6 +413,26 @@ pub fn set_track_art_path(conn: &Connection, id: i64, art_path: &str) -> AppResu
         "UPDATE tracks SET art_path = ?1 WHERE id = ?2",
         params![art_path, id],
     )?;
+    Ok(())
+}
+
+/// Drop a cached cover so consumers fall back to deriving art from the uri
+/// (e.g. after swapping a YouTube video, whose thumbnail comes from the id).
+pub fn clear_track_art_path(conn: &Connection, id: i64) -> AppResult<()> {
+    conn.execute("UPDATE tracks SET art_path = NULL WHERE id = ?1", [id])?;
+    Ok(())
+}
+
+/// Favorite / unfavorite a track. Favorites are stored as rating >= 1 so no
+/// schema change is needed; "My Favorites" filters on it.
+pub fn set_track_favorite(conn: &Connection, id: i64, favorite: bool) -> AppResult<()> {
+    let changed = conn.execute(
+        "UPDATE tracks SET rating = ?1 WHERE id = ?2",
+        params![i64::from(favorite), id],
+    )?;
+    if changed == 0 {
+        return Err(AppError::TrackNotFound(id));
+    }
     Ok(())
 }
 
@@ -414,6 +457,18 @@ pub fn get_track_by_uri(conn: &Connection, uri: &str) -> AppResult<Option<Track>
     Ok(conn
         .query_row("SELECT * FROM tracks WHERE uri = ?1", [uri], track_from_row)
         .optional()?)
+}
+
+/// Every track from a given source (e.g. "youtube") — used by the stream
+/// health-check / self-heal pass.
+pub fn tracks_by_source_kind(conn: &Connection, kind: &str) -> AppResult<Vec<Track>> {
+    let mut stmt = conn.prepare("SELECT * FROM tracks WHERE source_kind = ?1")?;
+    let rows = stmt.query_map([kind], track_from_row)?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -656,6 +711,39 @@ mod tests {
             .query_row("SELECT count(*) FROM tracks_fts", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn delete_tracks_batch_removes_selected_and_skips_missing() {
+        let conn = mem_db();
+        insert_track(&conn, &new_track("A", "X", "u:a"), 0).unwrap();
+        insert_track(&conn, &new_track("B", "X", "u:b"), 0).unwrap();
+        insert_track(&conn, &new_track("C", "X", "u:c"), 0).unwrap();
+        let id = |uri: &str| get_track_by_uri(&conn, uri).unwrap().unwrap().id;
+        let (a, b, c) = (id("u:a"), id("u:b"), id("u:c"));
+
+        // Put A and B in a playlist so we also exercise reference cleanup.
+        let pl = create_playlist(&conn, "P").unwrap();
+        add_to_playlist(&conn, pl, a).unwrap();
+        add_to_playlist(&conn, pl, b).unwrap();
+
+        // Delete A and B plus a bogus id (9999) — the bogus one is skipped, not
+        // an error, and only 2 rows are reported deleted.
+        let deleted = delete_tracks(&conn, &[a, b, 9999]).unwrap();
+        assert_eq!(deleted, 2);
+
+        let remaining: i64 = conn
+            .query_row("SELECT count(*) FROM tracks", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(remaining, 1);
+        assert!(get_track_by_uri(&conn, "u:a").unwrap().is_none());
+        assert!(get_track_by_uri(&conn, "u:c").unwrap().is_some());
+        assert_eq!(c, id("u:c")); // untouched
+        // Playlist references for the deleted tracks are gone.
+        let pl_items: i64 = conn
+            .query_row("SELECT count(*) FROM playlist_items", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(pl_items, 0);
     }
 
     #[test]

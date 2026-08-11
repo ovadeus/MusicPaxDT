@@ -342,7 +342,10 @@ async fn search_candidates(query: &str) -> Result<Vec<youtube::Candidate>, Strin
     // Official Data API when the user configured a key (most stable),
     // keyless web search otherwise (works out of the box).
     match keyring_get("youtube_api_key") {
-        Some(key) => youtube::search(http(), &key, query, 6, youtube::SortOrder::Relevance).await,
+        // Pull a wider result set (20, not 6) so the official "- Topic"/artist
+        // upload is actually present for best_match to prefer — relevance
+        // ordering frequently ranks obscure re-uploads above it.
+        Some(key) => youtube::search(http(), &key, query, 20, youtube::SortOrder::Relevance).await,
         None => youtube::search_keyless(http(), query, youtube::SortOrder::Relevance).await,
     }
 }
@@ -469,6 +472,207 @@ pub async fn mirror_playlist(
         matched,
         failed,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Self-healing library: find dead YouTube streams and re-resolve them.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepairReport {
+    /// STREAM_PLAYABLE YouTube tracks health-checked.
+    pub checked: usize,
+    /// Found unavailable (removed / private, per oEmbed).
+    pub dead: usize,
+    /// Successfully re-pointed to a working replacement video.
+    pub healed: usize,
+    /// Dead but no confident replacement was found.
+    pub still_dead: usize,
+    /// Titles that were healed (for a friendly summary).
+    pub healed_titles: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RepairProgress {
+    /// "checking" while probing health, "repairing" while re-resolving.
+    phase: String,
+    done: usize,
+    total: usize,
+    healed: usize,
+}
+
+/// Scan every STREAM_PLAYABLE YouTube track, detect the ones that no longer
+/// play (removed/private — probed for free via oEmbed, in parallel), and
+/// re-resolve each through the Mirror Engine (search → best_match) to a working
+/// replacement video. Emits `repair-progress`. This is the "self-healing
+/// library" pass: a playlist you built years ago keeps playing.
+#[tauri::command]
+pub async fn repair_streams(app: AppHandle, state: State<'_, AppState>) -> AppResult<RepairReport> {
+    let tracks = {
+        let conn = lock_unpoisoned(&state.db);
+        db::tracks_by_source_kind(&conn, "youtube")?
+    };
+    let checked = tracks.len();
+
+    // Phase 1 — health-check concurrently (bounded). oEmbed 4xx == unavailable.
+    const CONCURRENCY: usize = 8;
+    let mut dead: Vec<Track> = Vec::new();
+    let mut done = 0usize;
+    for chunk in tracks.chunks(CONCURRENCY) {
+        let mut handles = Vec::with_capacity(chunk.len());
+        for t in chunk {
+            let client = http().clone();
+            let vid = youtube::parse_video_id(&t.uri);
+            handles.push((t.clone(), tauri::async_runtime::spawn(async move {
+                match vid {
+                    // An oEmbed error (404/401/etc.) means the video is gone.
+                    Some(v) => youtube::oembed(&client, &v).await.is_err(),
+                    None => false,
+                }
+            })));
+        }
+        for (t, h) in handles {
+            done += 1;
+            if h.await.unwrap_or(false) {
+                dead.push(t);
+            }
+        }
+        let _ = app.emit(
+            "repair-progress",
+            RepairProgress {
+                phase: "checking".into(),
+                done,
+                total: checked,
+                healed: 0,
+            },
+        );
+    }
+
+    // Phase 2 — re-resolve the dead ones (sequential: rate-limited search + DB).
+    let dead_count = dead.len();
+    let mut healed = 0usize;
+    let mut healed_titles = Vec::new();
+    for (i, t) in dead.iter().enumerate() {
+        let title = t.title.clone().unwrap_or_default();
+        let artist = t.artist.clone().unwrap_or_default();
+        let query = if artist.is_empty() {
+            title.clone()
+        } else {
+            format!("{artist} {title}")
+        };
+        let _ = app.emit(
+            "repair-progress",
+            RepairProgress {
+                phase: "repairing".into(),
+                done: i,
+                total: dead_count,
+                healed,
+            },
+        );
+        if let Ok(candidates) = search_candidates(&query).await {
+            let want_ms = t.duration_ms.map(|d| d as u64);
+            if let Some((best, _score)) = youtube::best_match(&artist, &title, want_ms, &candidates) {
+                let old_id = youtube::parse_video_id(&t.uri);
+                // Only heal to a *different* video; the same id would still be dead.
+                if old_id.as_deref() != Some(best.video_id.as_str()) {
+                    let new_uri = youtube::watch_url(&best.video_id);
+                    let conn = lock_unpoisoned(&state.db);
+                    db::set_track_uri(&conn, t.id, &new_uri)?;
+                    // New video → drop the stale cached thumbnail (art derives from uri).
+                    db::clear_track_art_path(&conn, t.id)?;
+                    drop(conn);
+                    healed += 1;
+                    healed_titles.push(if title.is_empty() { query.clone() } else { title });
+                }
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+
+    let _ = app.emit(
+        "repair-progress",
+        RepairProgress {
+            phase: "repairing".into(),
+            done: dead_count,
+            total: dead_count,
+            healed,
+        },
+    );
+
+    Ok(RepairReport {
+        checked,
+        dead: dead_count,
+        healed,
+        still_dead: dead_count - healed,
+        healed_titles,
+    })
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReResolveResult {
+    pub healed: bool,
+    pub new_uri: Option<String>,
+    pub message: String,
+}
+
+/// Re-resolve a single YouTube track to a working replacement (used for
+/// auto-heal the moment the embed reports a video is unplayable). Unlike the
+/// batch pass this skips the oEmbed probe — the caller already knows it failed.
+#[tauri::command]
+pub async fn reresolve_stream(
+    track_id: i64,
+    state: State<'_, AppState>,
+) -> AppResult<ReResolveResult> {
+    let track = {
+        let conn = lock_unpoisoned(&state.db);
+        db::get_track(&conn, track_id)?
+    };
+    if track.source_kind != "youtube" {
+        return Ok(ReResolveResult {
+            healed: false,
+            new_uri: None,
+            message: "Only YouTube tracks can be re-resolved".into(),
+        });
+    }
+    let title = track.title.clone().unwrap_or_default();
+    let artist = track.artist.clone().unwrap_or_default();
+    let query = if artist.is_empty() {
+        title.clone()
+    } else {
+        format!("{artist} {title}")
+    };
+    if query.trim().is_empty() {
+        return Ok(ReResolveResult {
+            healed: false,
+            new_uri: None,
+            message: "No title to search for a replacement".into(),
+        });
+    }
+    let candidates = search_candidates(&query).await.map_err(AppError::Other)?;
+    let want_ms = track.duration_ms.map(|d| d as u64);
+    match youtube::best_match(&artist, &title, want_ms, &candidates) {
+        Some((best, _score))
+            if youtube::parse_video_id(&track.uri).as_deref() != Some(best.video_id.as_str()) =>
+        {
+            let new_uri = youtube::watch_url(&best.video_id);
+            let conn = lock_unpoisoned(&state.db);
+            db::set_track_uri(&conn, track_id, &new_uri)?;
+            db::clear_track_art_path(&conn, track_id)?;
+            Ok(ReResolveResult {
+                healed: true,
+                new_uri: Some(new_uri),
+                message: format!("Re-resolved “{title}”"),
+            })
+        }
+        _ => Ok(ReResolveResult {
+            healed: false,
+            new_uri: None,
+            message: "No working replacement found".into(),
+        }),
+    }
 }
 
 // ---------------------------------------------------------------------------

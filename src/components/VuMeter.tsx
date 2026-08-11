@@ -49,11 +49,30 @@ export default function VuMeter({ synthetic = false, active = false }: Props) {
   // Keep the latest mode flags visible to the rAF loop without re-binding it.
   const modeRef = useRef({ synthetic, active });
   modeRef.current = { synthetic, active };
+  // Kick the (self-idling) animation loop from outside the mount effect.
+  const ensureRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let raf = 0;
+    let running = false;
     let disposed = false;
+
+    // Nothing left to animate: all bars decayed and no peak-hold showing.
+    const EPS = 0.003;
+    const atRest = () =>
+      channels.current.every(
+        (c) => c.rms < EPS && c.peak < EPS && c.peakHold < EPS && c.holdFrames === 0,
+      );
+
+    // (Re)start the loop only if it isn't already running — the loop idles
+    // itself when there's no signal, so this is how it wakes back up.
+    const ensure = () => {
+      if (running || disposed) return;
+      running = true;
+      raf = requestAnimationFrame(draw);
+    };
+    ensureRef.current = ensure;
 
     onVuLevels((levels) => {
       if (modeRef.current.synthetic) return; // streams use the synth, not engine events
@@ -62,6 +81,7 @@ export default function VuMeter({ synthetic = false, active = false }: Props) {
       l.peak = Math.max(l.peak, levels.peakL);
       r.rms = Math.max(r.rms, levels.rmsR);
       r.peak = Math.max(r.peak, levels.peakR);
+      ensure(); // engine sent signal → make sure we're animating
     }).then((fn) => {
       if (disposed) fn();
       else unlisten = fn;
@@ -116,16 +136,30 @@ export default function VuMeter({ synthetic = false, active = false }: Props) {
           }
         });
       }
-      raf = requestAnimationFrame(draw);
+      // Keep animating only while there's live/synthetic signal or residual
+      // energy to decay; otherwise idle (this is the fix for the 60fps
+      // always-on canvas that pegged the webview CPU when nothing was playing).
+      if (act || live != null || !atRest()) {
+        raf = requestAnimationFrame(draw);
+      } else {
+        running = false;
+      }
     };
-    raf = requestAnimationFrame(draw);
+    ensure();
 
     return () => {
       disposed = true;
+      running = false;
       cancelAnimationFrame(raf);
       unlisten?.();
     };
   }, []);
+
+  // Synthetic lanes (YouTube / non-CORS radio) have no engine events, so wake
+  // the loop when they start playing.
+  useEffect(() => {
+    if (active) ensureRef.current();
+  }, [active]);
 
   const drawBar = (ctx: CanvasRenderingContext2D, y: number, ch: Channel) => {
     // background track

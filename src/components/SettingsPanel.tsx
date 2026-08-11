@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import * as ipc from "../lib/ipc";
+import { COLUMN_TOGGLES, type ColumnPrefs } from "../lib/columnPrefs";
 import type { EnrichIntegrationStatus, IntegrationStatus } from "../lib/types";
 
 const AI_PROVIDERS = [
@@ -14,6 +15,9 @@ interface Props {
   onClose: () => void;
   onError: (message: string) => void;
   onSaved: () => void;
+  /// Library-column visibility (Album/Genre/Year/Length/Plays) + setter.
+  columnPrefs: ColumnPrefs;
+  onColumnPref: (key: keyof ColumnPrefs, value: boolean) => void;
 }
 
 const FORMATS = [
@@ -38,7 +42,13 @@ const MP3_BITRATES = [
 
 /// The app-wide settings area. Sections are designed to grow — M3+ will add
 /// radio, AI-provider and theme settings here.
-export default function SettingsPanel({ onClose, onError, onSaved }: Props) {
+export default function SettingsPanel({
+  onClose,
+  onError,
+  onSaved,
+  columnPrefs,
+  onColumnPref,
+}: Props) {
   const [values, setValues] = useState<Record<string, string>>({});
   const [loaded, setLoaded] = useState(false);
   const [integrations, setIntegrations] = useState<IntegrationStatus | null>(null);
@@ -166,6 +176,27 @@ export default function SettingsPanel({ onClose, onError, onSaved }: Props) {
           <p className="settings-loading">Loading…</p>
         ) : (
           <>
+            <section className="settings-section">
+              <h3>Library columns</h3>
+              <p className="settings-note">
+                Show or hide columns in the library list. Title and Artist always show.
+              </p>
+              <div className="col-toggles">
+                {COLUMN_TOGGLES.map(({ key, label }) => (
+                  <label className="col-toggle-row" key={key}>
+                    <span>{label}</span>
+                    <input
+                      className="col-switch"
+                      type="checkbox"
+                      role="switch"
+                      checked={columnPrefs[key]}
+                      onChange={(e) => onColumnPref(key, e.target.checked)}
+                    />
+                  </label>
+                ))}
+              </div>
+            </section>
+
             <section className="settings-section">
               <h3>Recording</h3>
               <label className="settings-field">

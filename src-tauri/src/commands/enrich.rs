@@ -439,6 +439,7 @@ pub async fn apply_enrichment(
             year: e.year.or(track.year),
             genre: e.genre.or(track.genre.clone()),
             media_type: None,
+            uri: None,
         };
         let mbid = e.musicbrainz_id.clone();
         let track_id = e.track_id;

@@ -381,6 +381,53 @@ fn normalize(s: &str) -> Vec<String> {
         .collect()
 }
 
+/// Lowercased, alphanumeric-only form for loose substring matching of channel
+/// names against artists ("Led Zeppelin" ⊂ "ledzeppelinvevo").
+fn alnum_squash(s: &str) -> String {
+    s.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect()
+}
+
+/// Does the channel name plausibly belong to `artist`? True when the artist's
+/// squashed name is a substring of the squashed channel (handles "…VEVO",
+/// "…Official", "… - Topic", "TheArtistOfficialChannel", etc.).
+fn channel_names_artist(channel: &str, artist: &str) -> bool {
+    let a = alnum_squash(artist);
+    // Require a few chars so a 1–2 letter artist token doesn't match everything.
+    a.len() >= 3 && alnum_squash(channel).contains(&a)
+}
+
+/// How authoritative the uploading channel is for `artist`, 0..1. This is the
+/// strongest signal we have for skipping random re-uploads from obscure
+/// YouTubers in favour of the label/official upload.
+///
+/// - "<Artist> - Topic": YouTube's auto-generated "Art Track" channel carrying
+///   the label-provided official audio — the single best match. → 1.0
+/// - Official artist channel / VEVO whose name actually contains the artist. → 0.9
+/// - A channel simply named after the artist. → 0.6
+/// - A generic "official"/"vevo" channel NOT tied to this artist (aggregators,
+///   "Official Music", etc.) — only a faint signal. → 0.2
+/// - Anything else (some random uploader). → 0.0
+fn channel_authority(channel: &str, artist: &str) -> f32 {
+    let ch = channel.trim().to_lowercase();
+    if ch.is_empty() {
+        return 0.0;
+    }
+    // "Artist - Topic": YouTube's auto-generated official-audio channel.
+    // Tolerate the ASCII "-" and unicode "–" dash variants.
+    if ch.ends_with("- topic") || ch.ends_with("– topic") {
+        return 1.0;
+    }
+
+    let names_artist = channel_names_artist(channel, artist);
+    let branded = ch.contains("official") || ch.contains("vevo");
+    match (names_artist, branded) {
+        (true, true) => 0.9,   // "Adele" + VEVO/Official, e.g. "AdeleVEVO"
+        (true, false) => 0.6,  // channel just named after the artist
+        (false, true) => 0.2,  // generic "official"/"vevo" aggregator
+        (false, false) => 0.0, // some unrelated uploader
+    }
+}
+
 /// Heuristic match score, 0..~1.6. The M5 AI subsystem will add LLM ranking
 /// on top of this; per project rules the free heuristic always runs first.
 pub fn match_score(
@@ -401,13 +448,11 @@ pub fn match_score(
         / want_tokens.len() as f32;
     let mut score = overlap;
 
-    let channel = candidate.channel.to_lowercase();
-    let artist_lc = artist.to_lowercase();
-    if channel.ends_with("- topic") || channel.contains("official") {
-        score += 0.3;
-    } else if !artist_lc.is_empty() && channel.contains(&artist_lc) {
-        score += 0.25;
-    }
+    // Channel authority dominates: a "- Topic"/official-artist upload should beat
+    // a well-titled re-upload from an obscure channel even when the re-upload's
+    // title/duration match slightly better. Weight ≥ the max title+duration
+    // bonus so it is decisive rather than a tie-breaker.
+    score += channel_authority(&candidate.channel, artist) * 0.9;
 
     if let (Some(want), Some(got)) = (want_duration_ms, candidate.duration_ms) {
         let diff = want.abs_diff(got);
@@ -508,5 +553,51 @@ mod tests {
     fn matcher_rejects_garbage() {
         let candidates = vec![cand("totally unrelated video", "randomness", 100)];
         assert!(best_match("Led Zeppelin", "Kashmir", Some(509_000), &candidates).is_none());
+    }
+
+    #[test]
+    fn topic_channel_beats_obscure_reupload_with_better_title() {
+        // The obscure re-upload has a cleaner title AND an exact duration match;
+        // the "- Topic" upload should still win on channel authority.
+        let candidates = vec![
+            cand("Adele - Hello (Official)", "xX_MusicVault_Xx", 295),
+            cand("Hello", "Adele - Topic", 295),
+        ];
+        let (best, _) = best_match("Adele", "Hello", Some(295_000), &candidates).expect("match");
+        assert_eq!(best.channel, "Adele - Topic");
+    }
+
+    #[test]
+    fn official_artist_channel_beats_reupload() {
+        let candidates = vec![
+            cand("Rick Astley - Never Gonna Give You Up", "80sRewind", 213),
+            cand("Never Gonna Give You Up", "RickAstleyVEVO", 213),
+        ];
+        let (best, _) =
+            best_match("Rick Astley", "Never Gonna Give You Up", Some(213_000), &candidates)
+                .expect("match");
+        assert_eq!(best.channel, "RickAstleyVEVO");
+    }
+
+    #[test]
+    fn generic_official_aggregator_is_not_treated_as_artist_channel() {
+        // "Official Music" contains "official" but is not this artist's channel,
+        // so it must not out-rank a genuine artist-named channel.
+        let candidates = vec![
+            cand("Blinding Lights", "Official Music HD", 200),
+            cand("Blinding Lights", "The Weeknd", 200),
+        ];
+        let (best, _) =
+            best_match("The Weeknd", "Blinding Lights", Some(200_000), &candidates).expect("match");
+        assert_eq!(best.channel, "The Weeknd");
+    }
+
+    #[test]
+    fn channel_authority_tiers() {
+        assert_eq!(channel_authority("Led Zeppelin - Topic", "Led Zeppelin"), 1.0);
+        assert_eq!(channel_authority("RickAstleyVEVO", "Rick Astley"), 0.9);
+        assert_eq!(channel_authority("The Weeknd", "The Weeknd"), 0.6);
+        assert_eq!(channel_authority("Official Music HD", "The Weeknd"), 0.2);
+        assert_eq!(channel_authority("randomuploader", "The Weeknd"), 0.0);
     }
 }

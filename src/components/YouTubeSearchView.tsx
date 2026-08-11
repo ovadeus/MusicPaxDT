@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   CalendarDays,
   Check,
+  Link2,
   ListMusic,
   Search,
   SquarePlay,
@@ -37,11 +38,16 @@ export default function YouTubeSearchView({ onClose, onError, onInfo, onPlay }: 
   const [searched, setSearched] = useState(false);
   const [page, setPage] = useState(0);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
   // The global status banner sits behind this full-page overlay, so confirm
   // "Added" with a toast rendered inside the view.
   const [added, setAdded] = useState<Set<string>>(new Set());
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<number | undefined>(undefined);
+
+  // When the box holds a YouTube link, the action adds it directly instead of
+  // searching — so this one page covers both "paste a URL" and "search".
+  const isUrl = /youtu(\.be|be\.com|be-nocookie\.com)/i.test(query.trim());
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -61,6 +67,24 @@ export default function YouTubeSearchView({ onClose, onError, onInfo, onPlay }: 
       onError(`${e}`);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Add a pasted YouTube URL straight to the library (same import path as a
+  // search-result card), then clear the box.
+  const addUrl = async () => {
+    const u = query.trim();
+    if (!u) return;
+    setAdding(true);
+    try {
+      const track = await ipc.importStreamUrl(u);
+      onInfo(`Added “${track.title ?? "video"}” to the library`);
+      showToast(`Added “${track.title ?? "video"}”`);
+      setQuery("");
+    } catch (e) {
+      onError(`${e}`);
+    } finally {
+      setAdding(false);
     }
   };
 
@@ -113,34 +137,42 @@ export default function YouTubeSearchView({ onClose, onError, onInfo, onPlay }: 
           <span>Find YouTube Videos</span>
         </div>
         <p className="yt-find-sub">
-          Search for music and videos, then add any result to your library.
+          Search for music and videos — or paste a YouTube link to add it directly.
         </p>
         <div className="yt-find-row">
           <div className="yt-find-input">
-            <Search size={16} />
+            {isUrl ? <Link2 size={16} /> : <Search size={16} />}
             <input
               type="search"
-              placeholder="Search videos…"
+              placeholder="Search videos, or paste a YouTube link…"
               value={query}
               autoFocus
               onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && run()}
+              onKeyDown={(e) => e.key === "Enter" && (isUrl ? addUrl() : run())}
             />
           </div>
-          <select
-            className="yt-sort"
-            value={sort}
-            onChange={(e) => setSort(e.target.value as YtSort)}
-          >
-            {SORTS.map((s) => (
-              <option key={s.value} value={s.value}>
-                {s.label}
-              </option>
-            ))}
-          </select>
-          <button className="yt-search-btn" onClick={run} disabled={!query.trim() || loading}>
-            <Search size={16} /> {loading ? "Searching…" : "Search"}
-          </button>
+          {!isUrl && (
+            <select
+              className="yt-sort"
+              value={sort}
+              onChange={(e) => setSort(e.target.value as YtSort)}
+            >
+              {SORTS.map((s) => (
+                <option key={s.value} value={s.value}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+          )}
+          {isUrl ? (
+            <button className="yt-search-btn" onClick={addUrl} disabled={adding}>
+              <ListMusic size={16} /> {adding ? "Adding…" : "Add to Library"}
+            </button>
+          ) : (
+            <button className="yt-search-btn" onClick={run} disabled={!query.trim() || loading}>
+              <Search size={16} /> {loading ? "Searching…" : "Search"}
+            </button>
+          )}
         </div>
       </div>
 

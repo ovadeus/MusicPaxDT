@@ -66,13 +66,27 @@ export function updateTrackMetadata(
     year: number | null;
     genre: string | null;
     mediaType?: string | null;
+    /// Swap the source URI (STREAM_PLAYABLE YouTube only). Omit/blank to leave
+    /// it unchanged; validated + normalized server-side.
+    uri?: string | null;
   },
 ): Promise<Track> {
   return invoke<Track>("update_track_metadata", { trackId, ...fields });
 }
 
+/// Favorite / unfavorite a track (heart toggle). Stored as rating >= 1.
+export function setTrackFavorite(trackId: number, favorite: boolean): Promise<void> {
+  return invoke<void>("set_track_favorite", { trackId, favorite });
+}
+
 export function deleteTrack(trackId: number): Promise<void> {
   return invoke<void>("delete_track", { trackId });
+}
+
+/// Bulk-delete tracks from the library in one transaction. Returns the number
+/// of rows actually removed. Audio files on disk are not touched.
+export function deleteTracks(trackIds: number[]): Promise<number> {
+  return invoke<number>("delete_tracks", { trackIds });
 }
 
 export function readImageDataUrl(path: string): Promise<string> {
@@ -106,6 +120,10 @@ export function setOutputDevice(id: string): Promise<void> {
 
 export function loadTrack(trackId: number): Promise<void> {
   return invoke<void>("load_track", { trackId });
+}
+
+export function recordPlay(trackId: number): Promise<void> {
+  return invoke<void>("record_play", { trackId });
 }
 
 export function play(): Promise<void> {
@@ -404,6 +422,71 @@ export function onMirrorProgress(
   cb: (p: MirrorProgress) => void,
 ): Promise<UnlistenFn> {
   return listen<MirrorProgress>("mirror-progress", (e) => cb(e.payload));
+}
+
+// --- self-healing library (dead-link repair) ------------------------------
+
+export interface RepairReport {
+  checked: number;
+  dead: number;
+  healed: number;
+  stillDead: number;
+  healedTitles: string[];
+}
+
+export interface RepairProgress {
+  phase: "checking" | "repairing";
+  done: number;
+  total: number;
+  healed: number;
+}
+
+/// Health-check every STREAM_PLAYABLE YouTube track and re-resolve the dead
+/// ones (removed/private) to a working replacement via the Mirror Engine.
+export function repairStreams(): Promise<RepairReport> {
+  return invoke<RepairReport>("repair_streams");
+}
+
+export function onRepairProgress(
+  cb: (p: RepairProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<RepairProgress>("repair-progress", (e) => cb(e.payload));
+}
+
+export interface ReResolveResult {
+  healed: boolean;
+  newUri: string | null;
+  message: string;
+}
+
+/// Re-resolve one YouTube track to a working replacement — used to auto-heal
+/// the instant the embed reports the video is unplayable.
+export function reresolveStream(trackId: number): Promise<ReResolveResult> {
+  return invoke<ReResolveResult>("reresolve_stream", { trackId });
+}
+
+// --- external control (tray, global hotkey, macOS media keys) --------------
+
+/// Playback commands from the menu-bar tray, the global Play/Pause hotkey, or
+/// macOS remote commands (Control Center / media keys): "playpause" | "play" |
+/// "pause" | "next" | "prev".
+export function onMediaCommand(cb: (cmd: string) => void): Promise<UnlistenFn> {
+  return listen<string>("media-command", (e) => cb(e.payload));
+}
+
+export interface NowPlayingMeta {
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  durationMs: number | null;
+  positionMs: number | null;
+  playing: boolean;
+}
+
+/// Publish the current track + play state to the OS Now Playing surface
+/// (macOS Control Center / media keys / lock screen). No-op off macOS.
+export function setNowPlaying(meta: NowPlayingMeta): Promise<void> {
+  return invoke<void>("set_now_playing", { meta });
 }
 
 export function listPlaylists(): Promise<PlaylistInfo[]> {

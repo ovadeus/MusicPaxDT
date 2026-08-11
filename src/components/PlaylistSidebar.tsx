@@ -16,6 +16,7 @@ import type { FolderInfo, PlaylistInfo } from "../lib/types";
 
 export type LibraryView =
   | { kind: "all" }
+  | { kind: "favorites" }
   | { kind: "feed" }
   | { kind: "playlist"; id: number; name: string };
 
@@ -301,6 +302,14 @@ export default function PlaylistSidebar({
         onClick={() => onSelect({ kind: "all" })}
       >
         All Tracks
+      </button>
+
+      <button
+        className={`sidebar-item${view.kind === "favorites" ? " active" : ""}`}
+        onClick={() => onSelect({ kind: "favorites" })}
+        title="Tracks you've hearted"
+      >
+        My Favorites
       </button>
 
       <button

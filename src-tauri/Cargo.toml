@@ -13,9 +13,10 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
+tauri-plugin-global-shortcut = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -45,3 +46,19 @@ tokio = { version = "1.52.3", features = ["rt", "macros"] }
 # System-audio capture for the visualizer (so YouTube can be visualized with no
 # driver install). macos_13_0 enables audio capture.
 screencapturekit = { version = "8.0.0", features = ["macos_13_0"] }
+# macOS Now Playing: Control Center / menu-bar widget + hardware media keys +
+# lock-screen art via the MediaPlayer framework.
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3", features = [
+    "NSString",
+    "NSDictionary",
+    "NSValue",
+] }
+objc2-media-player = { version = "0.3", features = [
+    "MPNowPlayingInfoCenter",
+    "MPRemoteCommandCenter",
+    "MPRemoteCommand",
+    "MPRemoteCommandEvent",
+    "MPMediaItem",
+] }

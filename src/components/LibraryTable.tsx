@@ -1,8 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
+  BarChart3,
+  CheckSquare,
+  Clock3,
   Disc3,
   Flag,
+  Heart,
   LayoutGrid,
   Link as LinkIcon,
   List,
@@ -10,13 +14,18 @@ import {
   Pencil,
   RadioTower,
   Share2,
+  Shuffle,
   Sparkles,
-  Square,
   SquarePlay,
+  Trash2,
 } from "lucide-react";
 import MpxLogo from "./MpxLogo";
-import { MEDIA_TYPES, mediaTypeMeta } from "../lib/mediaTypes";
+import MediaTypeFilter from "./MediaTypeFilter";
+import { mediaTypeMeta } from "../lib/mediaTypes";
+import type { ColumnPrefs } from "../lib/columnPrefs";
 import type { MediaType, PlaylistInfo, SortField, SortSpec, Track } from "../lib/types";
+
+type ListenOrder = "recent" | "most_played" | "shuffle";
 
 interface Props {
   tracks: Track[];
@@ -29,6 +38,10 @@ interface Props {
   onActivate: (track: Track) => void;
   onEdit: (track: Track) => void;
   onEnrich: (track: Track) => void;
+  /// Toggle a track's favorite (heart). Favorited = rating >= 1.
+  onToggleFavorite?: (track: Track) => void;
+  /// Which optional columns to show (Album/Genre/Year/Length); set in Settings.
+  visibleColumns: ColumnPrefs;
   curator: boolean;
   enrichingId: number | null;
   nowPlayingId: number | null;
@@ -43,12 +56,23 @@ interface Props {
   onArtist?: (artist: string) => void;
   /// Changes when the view (playlist) switches → fades the list in (300ms).
   fadeKey?: string;
+  /// Overrides the empty-state text (e.g. the My Favorites view, which isn't a
+  /// playlist and has no + button).
+  emptyMessage?: string;
   /// Local-file track ids whose file is missing (shows a relink indicator).
   missingIds?: Set<number>;
   /// Relink a missing local file (opens a file picker).
   onRelink?: (track: Track) => void;
   /// Share the current playlist (shows a share icon left of the track count).
   onShare?: () => void;
+  /// Bulk-delete (curator only). When provided, a "Select" toggle appears; the
+  /// user checks tracks and deletes them in one batch. Deletes from the library.
+  onBulkDelete?: (ids: number[]) => Promise<void> | void;
+  /// Listen-mode presentation order. Hidden in Curator mode, where table-header
+  /// sorting remains the main management affordance.
+  listenOrder?: ListenOrder;
+  onListenOrderChange?: (order: ListenOrder) => void;
+  onReshuffle?: () => void;
 }
 
 /// Icon per capability, refined by source (YouTube streams get the YouTube
@@ -114,23 +138,27 @@ const COLUMNS: Column[] = [
     num: true,
     hideWhenNarrow: true,
   },
+  {
+    field: "play_count",
+    label: "Plays",
+    cell: (t) => String(t.playCount ?? 0),
+    num: true,
+    hideWhenNarrow: true,
+  },
 ];
 
-// Below this content width, drop Album/Genre/Year/Length to keep Title/Artist
+// Maps a toggleable column to its ColumnPrefs key (Title/Artist are always on).
+const PREF_KEY: Partial<Record<SortField, keyof ColumnPrefs>> = {
+  album: "album",
+  genre: "genre",
+  year: "year",
+  duration_ms: "length",
+  play_count: "plays",
+};
+
+// Below this content width, drop Album/Genre/Year/Length/Plays to keep Title/Artist
 // readable (e.g. a small window, or the Now Playing panel open in Curator mode).
 const COMPACT_WIDTH = 680;
-
-// Columns the user can manually collapse to a single icon to streamline the list.
-const COLLAPSIBLE: ReadonlySet<SortField> = new Set(["album", "genre", "year"]);
-const COLLAPSED_KEY = "library.collapsedCols";
-
-function loadCollapsed(): Set<SortField> {
-  try {
-    return new Set(JSON.parse(localStorage.getItem(COLLAPSED_KEY) || "[]"));
-  } catch {
-    return new Set();
-  }
-}
 
 export function formatDuration(ms: number | null): string {
   if (ms == null || ms < 0) return "–:––";
@@ -179,6 +207,8 @@ export default function LibraryTable(props: Props) {
     onActivate,
     onEdit,
     onEnrich,
+    onToggleFavorite,
+    visibleColumns,
     curator,
     enrichingId,
     nowPlayingId,
@@ -189,9 +219,14 @@ export default function LibraryTable(props: Props) {
     onRenameHeading,
     onArtist,
     fadeKey,
+    emptyMessage,
     missingIds,
     onRelink,
     onShare,
+    onBulkDelete,
+    listenOrder,
+    onListenOrderChange,
+    onReshuffle,
   } = props;
 
   const [editingHeading, setEditingHeading] = useState(false);
@@ -216,20 +251,13 @@ export default function LibraryTable(props: Props) {
     return () => ro.disconnect();
   }, []);
 
-  const columns = compact ? COLUMNS.filter((c) => !c.hideWhenNarrow) : COLUMNS;
-
-  // Per-column collapse (Album/Genre/Year): show only the toggle square, hide
-  // the data, to streamline the list. Persisted across sessions.
-  const [collapsed, setCollapsed] = useState<Set<SortField>>(loadCollapsed);
-  const toggleCollapse = (field: SortField) => {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(field)) next.delete(field);
-      else next.add(field);
-      localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]));
-      return next;
-    });
-  };
+  // Show a column only if the user hasn't hidden it in Settings, then drop the
+  // "hide when narrow" ones if the table is too tight (Title/Artist always stay).
+  const columns = COLUMNS.filter((c) => {
+    const key = PREF_KEY[c.field];
+    if (key && !visibleColumns[key]) return false;
+    return compact ? !c.hideWhenNarrow : true;
+  });
 
   const [viewMode, setViewMode] = useState<ViewMode>(() =>
     localStorage.getItem(VIEW_KEY) === "grid" ? "grid" : "list",
@@ -239,7 +267,82 @@ export default function LibraryTable(props: Props) {
     localStorage.setItem(VIEW_KEY, v);
   };
 
+  // Bulk selection (curator). `bulkMode` reveals a checkbox per track; selected
+  // tracks are removed in a single batch call. Selection is scoped to the
+  // currently visible (searched/filtered) tracks.
+  const bulkEnabled = curator && !!onBulkDelete;
+  const [bulkMode, setBulkMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [deleting, setDeleting] = useState(false);
+  const lastIndexRef = useRef<number | null>(null);
+
+  // Checkboxes may only render where bulk delete is actually available (curator
+  // + an onBulkDelete handler). This keeps a stale `bulkMode` from leaking
+  // checkboxes into Listening mode after a mode switch.
+  const bulkActive = bulkEnabled && bulkMode;
+
+  const selectedVisible = tracks.filter((t) => selectedIds.has(t.id));
+  const allVisibleSelected = tracks.length > 0 && selectedVisible.length === tracks.length;
+
+  const exitBulk = () => {
+    setBulkMode(false);
+    setSelectedIds(new Set());
+    lastIndexRef.current = null;
+  };
+
+  // Toggle one row; Shift extends the range from the last-clicked row (add-only).
+  const toggleAt = (index: number, shiftKey: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (shiftKey && lastIndexRef.current != null) {
+        const [a, b] =
+          lastIndexRef.current <= index
+            ? [lastIndexRef.current, index]
+            : [index, lastIndexRef.current];
+        for (let i = a; i <= b; i++) next.add(tracks[i].id);
+      } else {
+        const id = tracks[index].id;
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+      }
+      return next;
+    });
+    lastIndexRef.current = index;
+  };
+
+  const selectAllVisible = () =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      tracks.forEach((t) => next.add(t.id));
+      return next;
+    });
+  const clearSelection = () => {
+    setSelectedIds(new Set());
+    lastIndexRef.current = null;
+  };
+
+  const runBulkDelete = async () => {
+    const ids = selectedVisible.map((t) => t.id);
+    if (ids.length === 0 || !onBulkDelete) return;
+    const ok = window.confirm(
+      `Delete ${ids.length} track${ids.length === 1 ? "" : "s"} from the library?\n\n` +
+        `This removes the library ${
+          ids.length === 1 ? "entry" : "entries"
+        } (and any playlist references). Audio files on disk are not deleted.`,
+    );
+    if (!ok) return;
+    setDeleting(true);
+    try {
+      await onBulkDelete(ids);
+      clearSelection();
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const tableSortEnabled = curator || !listenOrder;
   const toggleSort = (field: SortField) => {
+    if (!tableSortEnabled) return;
     if (sort.field === field) {
       onSortChange({ field, dir: sort.dir === "asc" ? "desc" : "asc" });
     } else {
@@ -248,7 +351,7 @@ export default function LibraryTable(props: Props) {
   };
 
   const arrow = (field: SortField) =>
-    sort.field === field ? (sort.dir === "asc" ? " ▲" : " ▼") : "";
+    tableSortEnabled && sort.field === field ? (sort.dir === "asc" ? " ▲" : " ▼") : "";
 
   return (
     <section className="library" ref={sectionRef}>
@@ -302,6 +405,47 @@ export default function LibraryTable(props: Props) {
             onChange={(e) => onQueryChange(e.target.value)}
           />
         )}
+        {onMediaType && (
+          <MediaTypeFilter value={mediaType ?? null} onChange={onMediaType} />
+        )}
+        {!curator && listenOrder && onListenOrderChange && (
+          <div className="listen-order" role="group" aria-label="Listen order">
+            <button
+              className={listenOrder === "recent" ? "active" : ""}
+              title="Recent — newest additions first"
+              aria-pressed={listenOrder === "recent"}
+              onClick={() => onListenOrderChange("recent")}
+            >
+              <Clock3 size={15} />
+              <span>Recent</span>
+            </button>
+            <button
+              className={listenOrder === "most_played" ? "active" : ""}
+              title="Most Played — highest play count first"
+              aria-pressed={listenOrder === "most_played"}
+              onClick={() => onListenOrderChange("most_played")}
+            >
+              <BarChart3 size={15} />
+              <span>Most</span>
+            </button>
+            <button
+              className={listenOrder === "shuffle" ? "active" : ""}
+              title={
+                listenOrder === "shuffle"
+                  ? "Shuffle — click again to reshuffle"
+                  : "Shuffle — randomize the visible tracks"
+              }
+              aria-pressed={listenOrder === "shuffle"}
+              onClick={() => {
+                if (listenOrder === "shuffle") onReshuffle?.();
+                else onListenOrderChange("shuffle");
+              }}
+            >
+              <Shuffle size={15} />
+              <span>Shuffle</span>
+            </button>
+          </div>
+        )}
         <div className="view-toggle" role="group" aria-label="View mode">
           <button
             className={viewMode === "list" ? "active" : ""}
@@ -327,29 +471,45 @@ export default function LibraryTable(props: Props) {
             <Share2 size={15} />
           </button>
         )}
+        {bulkEnabled && (
+          <div className="bulk-controls">
+            <button
+              className={`bulk-toggle${bulkMode ? " active" : ""}`}
+              title={bulkMode ? "Exit selection mode" : "Select multiple tracks to delete"}
+              aria-pressed={bulkMode}
+              onClick={() => (bulkMode ? exitBulk() : setBulkMode(true))}
+            >
+              <CheckSquare size={15} />
+              <span>Select</span>
+            </button>
+            {bulkMode && (
+              <button
+                className="bulk-selectall"
+                onClick={allVisibleSelected ? clearSelection : selectAllVisible}
+                disabled={deleting || tracks.length === 0}
+              >
+                {allVisibleSelected ? "Deselect all" : "Select all"}
+              </button>
+            )}
+            {bulkMode && selectedVisible.length > 0 && (
+              <>
+                <button
+                  className="bulk-delete"
+                  onClick={runBulkDelete}
+                  disabled={deleting}
+                >
+                  <Trash2 size={14} /> Delete ({selectedVisible.length})
+                </button>
+                <button className="bulk-clear" onClick={clearSelection} disabled={deleting}>
+                  Clear
+                </button>
+              </>
+            )}
+          </div>
+        )}
         <span className="track-count">
           {tracks.length} track{tracks.length === 1 ? "" : "s"}
         </span>
-        {onMediaType && (
-          <div className="mtype-chips" role="tablist" aria-label="Filter by type">
-            <button
-              className={`mtype-chip${mediaType == null ? " active" : ""}`}
-              onClick={() => onMediaType(null)}
-            >
-              All
-            </button>
-            {MEDIA_TYPES.map((m) => (
-              <button
-                key={m.key}
-                className={`mtype-chip${mediaType === m.key ? " active" : ""}`}
-                title={m.label}
-                onClick={() => onMediaType(mediaType === m.key ? null : m.key)}
-              >
-                <m.Icon size={15} style={{ color: m.color }} />
-              </button>
-            ))}
-          </div>
-        )}
       </div>
       <div className="library-scroll" key={fadeKey}>
         {viewMode === "grid" ? (
@@ -361,14 +521,30 @@ export default function LibraryTable(props: Props) {
             </div>
           ) : (
             <div className="library-grid">
-              {tracks.map((t) => (
+              {tracks.map((t, idx) => (
                 <div
                   key={t.id}
-                  className={`grid-card${t.id === nowPlayingId ? " playing" : ""}`}
+                  className={`grid-card${t.id === nowPlayingId ? " playing" : ""}${
+                    bulkActive && selectedIds.has(t.id) ? " selected" : ""
+                  }`}
                   title={`${t.title ?? "Untitled"}${t.artist ? ` — ${t.artist}` : ""}`}
-                  onClick={() => onActivate(t)}
+                  onClick={(e) => (bulkActive ? toggleAt(idx, e.shiftKey) : onActivate(t))}
+                  onDoubleClick={() => onActivate(t)}
                 >
                   <div className="grid-cover">
+                    {bulkActive && (
+                      <input
+                        type="checkbox"
+                        className="grid-select"
+                        checked={selectedIds.has(t.id)}
+                        aria-label="Select track"
+                        onChange={() => {}}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleAt(idx, e.shiftKey);
+                        }}
+                      />
+                    )}
                     <GridCover track={t} />
                     {curator && (
                       <button
@@ -393,62 +569,76 @@ export default function LibraryTable(props: Props) {
         <table className="library-table">
           <thead>
             <tr>
+              {bulkActive && (
+                <th className="sel-col">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all"
+                    checked={allVisibleSelected}
+                    onChange={() => (allVisibleSelected ? clearSelection() : selectAllVisible())}
+                  />
+                </th>
+              )}
               <th className="cap-col" title="Capability">
                 <Flag size={12} />
               </th>
               <th className="type-col">Type</th>
-              {columns.map((c) => {
-                const collapsible = COLLAPSIBLE.has(c.field);
-                const isCollapsed = collapsible && collapsed.has(c.field);
-                const cls = [c.num ? "num" : "", isCollapsed ? "col-collapsed" : ""]
-                  .filter(Boolean)
-                  .join(" ");
-                return (
-                  <th key={c.field} className={cls || undefined}>
-                    {collapsible && (
-                      <button
-                        className="col-toggle"
-                        title={isCollapsed ? `Show ${c.label}` : `Hide ${c.label}`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          toggleCollapse(c.field);
-                        }}
-                      >
-                        <Square size={11} fill={isCollapsed ? "none" : "currentColor"} />
-                      </button>
-                    )}
-                    {!isCollapsed && (
-                      <span className="col-label" onClick={() => toggleSort(c.field)}>
-                        {c.label}
-                        {arrow(c.field)}
-                      </span>
-                    )}
-                  </th>
-                );
-              })}
+              <th className="fav-col" title="Favorite">
+                <Heart size={12} />
+              </th>
+              {columns.map((c) => (
+                <th key={c.field} className={c.num ? "num" : undefined}>
+                  <span
+                    className={`col-label${tableSortEnabled ? "" : " disabled"}`}
+                    onClick={() => toggleSort(c.field)}
+                  >
+                    {c.label}
+                    {arrow(c.field)}
+                  </span>
+                </th>
+              ))}
               {curator && <th className="add-col" />}
             </tr>
           </thead>
           <tbody>
             {tracks.length === 0 ? (
               <tr>
-                <td className="empty-row" colSpan={columns.length + 2 + (curator ? 1 : 0)}>
-                  {heading
-                    ? "This playlist is empty — add tracks with the + button."
-                    : "Library is empty — use “Import Folder” or “Add URL” to add music."}
+                <td
+                  className="empty-row"
+                  colSpan={columns.length + 3 + (curator ? 1 : 0) + (bulkActive ? 1 : 0)}
+                >
+                  {emptyMessage ??
+                    (heading
+                      ? "This playlist is empty — add tracks with the + button."
+                      : "Library is empty — use “Import Folder” or “Add URL” to add music.")}
                 </td>
               </tr>
             ) : (
-              tracks.map((t) => {
+              tracks.map((t, idx) => {
                 const cap = capabilityIcon(t);
                 return (
                   <tr
                     key={t.id}
                     className={`${t.id === nowPlayingId ? "playing" : ""}${
                       missingIds?.has(t.id) ? " missing" : ""
-                    }`}
+                    }${bulkActive && selectedIds.has(t.id) ? " selected" : ""}`}
+                    onClick={bulkActive ? (e) => toggleAt(idx, e.shiftKey) : undefined}
                     onDoubleClick={() => onActivate(t)}
                   >
+                    {bulkActive && (
+                      <td className="sel-col">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(t.id)}
+                          aria-label="Select track"
+                          onChange={() => {}}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleAt(idx, e.shiftKey);
+                          }}
+                        />
+                      </td>
+                    )}
                     <td className="cap-col">
                       {missingIds?.has(t.id) ? (
                         <button
@@ -478,18 +668,31 @@ export default function LibraryTable(props: Props) {
                         </td>
                       );
                     })()}
+                    {(() => {
+                      const fav = t.rating >= 1;
+                      return (
+                        <td className="fav-col">
+                          <button
+                            className={`fav-btn${fav ? " on" : ""}`}
+                            title={fav ? "Remove from Favorites" : "Add to Favorites"}
+                            aria-label={fav ? "Remove from Favorites" : "Add to Favorites"}
+                            aria-pressed={fav}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onToggleFavorite?.(t);
+                            }}
+                          >
+                            <Heart size={15} fill={fav ? "currentColor" : "none"} />
+                          </button>
+                        </td>
+                      );
+                    })()}
                     {columns.map((c) => {
-                      const isCollapsed = COLLAPSIBLE.has(c.field) && collapsed.has(c.field);
-                      const cls = [c.num ? "num" : "", isCollapsed ? "col-collapsed" : ""]
-                        .filter(Boolean)
-                        .join(" ");
                       const clickableArtist =
                         c.field === "artist" && onArtist && t.artist;
                       return (
-                        <td key={c.field} className={cls || undefined}>
-                          {isCollapsed ? (
-                            ""
-                          ) : clickableArtist ? (
+                        <td key={c.field} className={c.num ? "num" : undefined}>
+                          {clickableArtist ? (
                             <button
                               className="artist-link"
                               title={`Show all by ${t.artist}`}

@@ -4,12 +4,10 @@ import {
   ChevronDown,
   FileMusic,
   FolderPlus,
-  Link2,
-  ListMusic,
+  HeartPulse,
   Music,
   Plus,
   RadioTower,
-  Search,
   Sparkles,
   Wand2,
 } from "lucide-react";
@@ -23,11 +21,10 @@ interface Props {
   onAir?: boolean;
   onImportFolder: () => void;
   onImportMpx: () => void;
-  onAddYouTube: () => void;
-  onAddSpotify: () => void;
-  onSearchYouTube: () => void;
   onClean: () => void;
   onEnrich: () => void;
+  /// Health-check + re-resolve dead YouTube streams (self-healing library).
+  onRepair: () => void;
   /// Shown only when an AI provider (key or Ollama) is configured.
   aiAvailable?: boolean;
   onAiAssistant?: () => void;
@@ -95,12 +92,12 @@ export default function ManageMusicMenu(props: Props) {
         <div className="addmedia-dropdown" role="menu">
           {item("Import Music Folder", FolderPlus, props.onImportFolder)}
           {item("Import .mpx Playlist", FileMusic, props.onImportMpx)}
-          {item("Add YouTube URL", Link2, props.onAddYouTube)}
-          {item("Add Spotify Playlist URL", ListMusic, props.onAddSpotify)}
-          {item("Search YouTube…", Search, props.onSearchYouTube)}
           <div className="mode-sep" />
           {item("Clean Data", Wand2, props.onClean, enrichDisabled)}
           {item("Enrich", Sparkles, props.onEnrich, enrichDisabled)}
+          {item("Repair Dead Links", HeartPulse, props.onRepair, {
+            title: "Find unavailable YouTube tracks and re-resolve them",
+          })}
           {props.aiAvailable &&
             props.onAiAssistant &&
             item("AI Assistant", Bot, props.onAiAssistant, props.busy ? { disabled: true } : undefined)}

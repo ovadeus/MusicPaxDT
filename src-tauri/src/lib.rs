@@ -1,10 +1,12 @@
 pub mod ai;
 pub mod audio;
 pub mod commands;
+pub mod controls;
 pub mod enrich;
 pub mod error;
 pub mod library;
 pub mod net;
+pub mod now_playing;
 pub mod sources;
 pub mod state;
 
@@ -32,7 +34,8 @@ pub fn run() {
 
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init());
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build());
     if !cfg!(dev) {
         builder = builder.plugin(tauri_plugin_localhost::Builder::new(port).build());
     }
@@ -67,13 +70,22 @@ pub fn run() {
                 // dialog pickers), so hand DnD back to the page.
                 .disable_drag_drop_handler()
                 .build()?;
+
+            // Menu-bar tray mini-controller + global Play/Pause hotkey.
+            controls::init(app);
+            // macOS Now Playing: Control Center / media-key transport handlers.
+            now_playing::register_remote_commands(&app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::import_folder,
             commands::list_tracks,
             commands::update_track_metadata,
+            commands::set_track_favorite,
+            commands::set_now_playing,
             commands::delete_track,
+            commands::delete_tracks,
+            commands::record_play,
             commands::read_image_data_url,
             commands::artist_bio,
             commands::set_artist_bio,
@@ -112,6 +124,8 @@ pub fn run() {
             commands::streams::import_stream_url,
             commands::streams::import_direct_stream,
             commands::streams::mirror_playlist,
+            commands::streams::repair_streams,
+            commands::streams::reresolve_stream,
             commands::streams::radio_top,
             commands::streams::radio_search,
             commands::streams::resolve_radio_stream,

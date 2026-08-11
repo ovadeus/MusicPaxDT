@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   AudioLines,
@@ -8,14 +8,20 @@ import {
   Maximize2,
   Minimize2,
   PictureInPicture2,
-  Settings as SettingsIcon,
 } from "lucide-react";
 import MpxLogo from "./components/MpxLogo";
+import { YouTubeIcon, SpotifyIcon } from "./components/BrandIcons";
+import CommandPalette, { type PaletteAction } from "./components/CommandPalette";
 import AIAssistantModal from "./components/AIAssistantModal";
 import ManageMusicMenu from "./components/ManageMusicMenu";
 import Visualizer from "./components/Visualizer";
 import VizSettingsBoard from "./components/VizSettingsBoard";
 import { loadViz, saveViz, type VizSettings } from "./lib/vizSettings";
+import {
+  loadColumnPrefs,
+  saveColumnPrefs,
+  type ColumnPrefs,
+} from "./lib/columnPrefs";
 import GoLivePanel from "./components/GoLivePanel";
 import AddUrlModal from "./components/AddUrlModal";
 import SharePlaylistModal from "./components/SharePlaylistModal";
@@ -58,6 +64,7 @@ import type {
 import "./styles/theme.css";
 
 const VIDEO_URI_EXTS = ["mp4", "m4v", "webm", "mov", "mkv", "avi", "ogv"];
+type ListenOrder = "recent" | "most_played" | "shuffle";
 
 /// A direct-stream URL that points at a video file (vs. audio).
 function isVideoUri(uri: string): boolean {
@@ -91,6 +98,26 @@ function sortTracks(list: Track[], sort: SortSpec): Track[] {
   });
 }
 
+function seededTrackScore(id: number, seed: number): number {
+  let x = Math.imul(id ^ seed, 0x45d9f3b);
+  x = Math.imul((x >>> 16) ^ x, 0x45d9f3b);
+  return ((x >>> 16) ^ x) >>> 0;
+}
+
+function orderForListening(list: Track[], order: ListenOrder, shuffleSeed: number): Track[] {
+  if (order === "recent") {
+    return [...list].sort((a, b) => (b.addedAt - a.addedAt) || a.id - b.id);
+  }
+  if (order === "most_played") {
+    return [...list].sort(
+      (a, b) => (b.playCount - a.playCount) || (b.addedAt - a.addedAt) || a.id - b.id,
+    );
+  }
+  return [...list].sort(
+    (a, b) => seededTrackScore(a.id, shuffleSeed) - seededTrackScore(b.id, shuffleSeed),
+  );
+}
+
 export default function App() {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [view, setView] = useState<LibraryView>({ kind: "all" });
@@ -117,6 +144,7 @@ export default function App() {
     recordedMs: 0,
   });
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [addUrlMode, setAddUrlMode] = useState<"youtube" | "spotify" | null>(null);
   const [shareTarget, setShareTarget] = useState<{ id: number; name: string } | null>(null);
   const [ytSearchOpen, setYtSearchOpen] = useState(false);
@@ -135,6 +163,15 @@ export default function App() {
     setVizSettings((s) => {
       const next = { ...s, ...patch };
       saveViz(next);
+      return next;
+    });
+  }, []);
+  // Library-table column visibility (Album/Genre/Year/Length), set in Settings.
+  const [columnPrefs, setColumnPrefs] = useState<ColumnPrefs>(loadColumnPrefs);
+  const setColumnPref = useCallback((key: keyof ColumnPrefs, value: boolean) => {
+    setColumnPrefs((s) => {
+      const next = { ...s, [key]: value };
+      saveColumnPrefs(next);
       return next;
     });
   }, []);
@@ -201,14 +238,39 @@ export default function App() {
     capped: boolean;
   } | null>(null);
   const [proposals, setProposals] = useState<EnrichProposal[] | null>(null);
+  const [repairProgress, setRepairProgress] = useState<{
+    phase: "checking" | "repairing";
+    done: number;
+    total: number;
+    healed: number;
+  } | null>(null);
   const [mode, setMode] = useState<UiMode>(
     () => (localStorage.getItem("ui.mode") as UiMode) || "listening",
   );
   const curator = mode === "curator";
+  const [listenOrder, setListenOrder] = useState<ListenOrder>(() => {
+    const saved = localStorage.getItem("listen.order");
+    return saved === "most_played" || saved === "shuffle" ? saved : "recent";
+  });
+  const [shuffleSeed, setShuffleSeed] = useState(() => Number(localStorage.getItem("listen.shuffleSeed")) || Date.now());
 
   const changeMode = (m: UiMode) => {
     setMode(m);
     localStorage.setItem("ui.mode", m);
+  };
+  const changeListenOrder = (order: ListenOrder) => {
+    setListenOrder(order);
+    localStorage.setItem("listen.order", order);
+    if (order === "shuffle") {
+      const next = Date.now();
+      setShuffleSeed(next);
+      localStorage.setItem("listen.shuffleSeed", String(next));
+    }
+  };
+  const reshuffle = () => {
+    const next = Date.now();
+    setShuffleSeed(next);
+    localStorage.setItem("listen.shuffleSeed", String(next));
   };
 
   const [showNowPlaying, setShowNowPlaying] = useState(
@@ -231,7 +293,10 @@ export default function App() {
   }, []);
 
   // Visualizer: capture a system-audio loopback so YouTube can be visualized.
-  const trySystemAudio = useCallback(async () => {
+  // `device` = a specific audio input to capture (a virtual/loopback device —
+  // needs no permission); `null` = the no-install ScreenCaptureKit path (needs
+  // Screen Recording, which unsigned dev builds keep losing across rebuilds).
+  const trySystemAudio = useCallback(async (device: string | null) => {
     const HINTS = [
       "blackhole",
       "loopback",
@@ -243,9 +308,23 @@ export default function App() {
       "aggregate",
       "multi-output",
       "wave link",
+      "ark",
+      "audio routing",
+      "soundsource",
     ];
     setVizCaptureMsg("Starting system-audio capture…");
-    // Preferred path: no-install ScreenCaptureKit (macOS 13+). The first run
+    // Explicit device pick → capture that input directly, no Screen Recording.
+    if (device) {
+      try {
+        await ipc.startVizCapture(device);
+        setVizCaptureMsg(null);
+        setSystemCapture(true);
+      } catch (e) {
+        setVizCaptureMsg(`Couldn't capture “${device}”: ${e}`);
+      }
+      return;
+    }
+    // No device chosen: no-install ScreenCaptureKit (macOS 13+). The first run
     // triggers the Screen-Recording permission prompt.
     try {
       await ipc.startScreenAudio();
@@ -305,6 +384,10 @@ export default function App() {
         // filter is also applied client-side for playlists.
         ts = sortTracks(await ipc.playlistTracks(view.id), sort);
         if (mediaType) ts = ts.filter((t) => t.mediaType === mediaType);
+      } else if (view.kind === "favorites") {
+        // "My Favorites": the library, narrowed to hearted tracks (rating >= 1).
+        const all = await ipc.listTracks({ query, sort, mediaType });
+        ts = all.filter((t) => t.rating >= 1);
       } else {
         ts = await ipc.listTracks({ query, sort, mediaType });
       }
@@ -319,6 +402,90 @@ export default function App() {
       showStatus(`Failed to load library: ${e}`);
     }
   }, [view, query, sort, showStatus, source, mediaTypeFilter, artistFilter]);
+
+  // Heart toggle: favorite/unfavorite a track (stored as rating >= 1). Optimistic
+  // — update the row in place, and drop it from the list if we're unhearting it
+  // inside the My Favorites view.
+  const toggleFavorite = useCallback(
+    async (t: Track) => {
+      const fav = t.rating >= 1;
+      try {
+        await ipc.setTrackFavorite(t.id, !fav);
+        setTracks((prev) => {
+          const next = prev.map((x) => (x.id === t.id ? { ...x, rating: fav ? 0 : 1 } : x));
+          return view.kind === "favorites" && fav ? next.filter((x) => x.id !== t.id) : next;
+        });
+      } catch (e) {
+        showStatus(`${e}`);
+      }
+    },
+    [view, showStatus],
+  );
+
+  // Self-healing library: check every YouTube stream and re-resolve dead ones.
+  const handleRepair = useCallback(async () => {
+    if (repairProgress) return; // already running
+    setRepairProgress({ phase: "checking", done: 0, total: 0, healed: 0 });
+    const unlisten = await ipc.onRepairProgress(setRepairProgress);
+    try {
+      const r = await ipc.repairStreams();
+      const bits =
+        r.dead === 0
+          ? [`checked ${r.checked} — all playable`]
+          : [
+              `checked ${r.checked}`,
+              `${r.dead} unavailable`,
+              `${r.healed} re-resolved`,
+              ...(r.stillDead > 0 ? [`${r.stillDead} unfixable`] : []),
+            ];
+      showStatus(`Dead-link repair: ${bits.join(" · ")}`);
+      if (r.healed > 0) refreshTracks();
+    } catch (e) {
+      showStatus(`Repair failed: ${e}`);
+    } finally {
+      unlisten();
+      setRepairProgress(null);
+    }
+  }, [repairProgress, showStatus, refreshTracks]);
+
+  // Auto-heal: when the YouTube embed reports the playing video is unplayable,
+  // re-resolve it to a working replacement once (guarded per track to avoid a
+  // loop if the replacement also fails). The player reloads via the new uri.
+  const autoHealTried = useRef<Set<number>>(new Set());
+  const handleStreamFatal = useCallback(async () => {
+    const t = stream;
+    if (!t || t.sourceKind !== "youtube" || autoHealTried.current.has(t.id)) return;
+    autoHealTried.current.add(t.id);
+    showStatus(`“${t.title ?? "This video"}” is unavailable — finding a replacement…`);
+    try {
+      const r = await ipc.reresolveStream(t.id);
+      if (r.healed && r.newUri) {
+        const newUri = r.newUri;
+        setStream((s) => (s && s.id === t.id ? { ...s, uri: newUri, artPath: null } : s));
+        setTracks((prev) =>
+          prev.map((x) => (x.id === t.id ? { ...x, uri: newUri, artPath: null } : x)),
+        );
+        showStatus(`Re-resolved “${t.title ?? "video"}” to a working version`);
+      } else {
+        showStatus(`Couldn't find a working replacement for “${t.title ?? "this video"}”`);
+      }
+    } catch (e) {
+      showStatus(`Auto-heal failed: ${e}`);
+    }
+  }, [stream, showStatus]);
+
+  // ⌘K / Ctrl+K toggles the command palette from anywhere.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
+        e.preventDefault();
+        setPaletteOpen((o) => !o);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
 
   // Local files that have moved/ejected — flagged in the table with a relink dot.
   const [missingIds, setMissingIds] = useState<Set<number>>(new Set());
@@ -456,7 +623,11 @@ export default function App() {
   // ----- playback routing (the capability gate, UI side) -------------------
 
   const tracksRef = useRef(tracks);
-  tracksRef.current = tracks;
+  const displayTracks = useMemo(
+    () => (curator ? tracks : orderForListening(tracks, listenOrder, shuffleSeed)),
+    [curator, tracks, listenOrder, shuffleSeed],
+  );
+  tracksRef.current = displayTracks;
   // The play queue is snapshotted when a library track starts (see playTrack),
   // so searching or switching views afterwards can't derail next/prev — which
   // otherwise walked the live, now-different table. Feed items (negative ids)
@@ -490,6 +661,11 @@ export default function App() {
           setEngineStat(null);
           setSource("library");
           setPositionMs(0);
+          setTracks((prev) =>
+            prev.map((t) =>
+              t.id === track.id ? { ...t, playCount: t.playCount + 1 } : t,
+            ),
+          );
         } else if (
           track.capability === "STREAM_PLAYABLE" &&
           (track.sourceKind === "youtube" ||
@@ -507,6 +683,14 @@ export default function App() {
           // radio/stream keep their browse panel open; others go to Library
           if (track.sourceKind !== "radio" && track.sourceKind !== "stream") {
             setSource("library");
+          }
+          if (track.id >= 0) {
+            ipc.recordPlay(track.id).catch((e) => showStatus(`${e}`));
+            setTracks((prev) =>
+              prev.map((t) =>
+                t.id === track.id ? { ...t, playCount: t.playCount + 1 } : t,
+              ),
+            );
           }
         } else {
           showStatus("This entry can only be opened externally.");
@@ -555,6 +739,64 @@ export default function App() {
     },
     [playTrack],
   );
+
+  // Playback commands from the tray / global hotkey / (later) macOS media keys.
+  // Routes to the engine or the YouTube embed depending on what's playing.
+  const handleMediaCommand = useCallback(
+    (cmd: string) => {
+      const playing = stream ? streamPlaying : playState === "playing";
+      switch (cmd) {
+        case "playpause":
+          if (stream) setStreamPlaying((p) => !p);
+          else if (playing) ipc.pause().catch((e) => showStatus(`${e}`));
+          else ipc.play().catch((e) => showStatus(`${e}`));
+          break;
+        case "play":
+          if (stream) setStreamPlaying(true);
+          else ipc.play().catch((e) => showStatus(`${e}`));
+          break;
+        case "pause":
+          if (stream) setStreamPlaying(false);
+          else ipc.pause().catch((e) => showStatus(`${e}`));
+          break;
+        case "next":
+          playNext(nowRef.current.id);
+          break;
+        case "prev":
+          playPrev(nowRef.current.id);
+          break;
+      }
+    },
+    [stream, streamPlaying, playState, playNext, playPrev, showStatus],
+  );
+  useEffect(() => {
+    let un: (() => void) | undefined;
+    ipc.onMediaCommand(handleMediaCommand).then((fn) => (un = fn));
+    return () => un?.();
+  }, [handleMediaCommand]);
+
+  // Publish the current track + play state to the OS Now Playing surface
+  // (macOS Control Center / media keys / lock screen). The system extrapolates
+  // elapsed time from the rate, so we only push on track / play-state change
+  // (not every position tick), reading the live position from a ref.
+  const npTrack = stream ?? now?.track ?? null;
+  const npPlaying = stream ? streamPlaying : playState === "playing";
+  const npDuration = stream ? (streamDur > 0 ? streamDur : npTrack?.durationMs ?? null) : (npTrack?.durationMs ?? null);
+  const curPosRef = useRef(0);
+  curPosRef.current = stream ? streamPos : positionMs;
+  useEffect(() => {
+    ipc
+      .setNowPlaying({
+        title: npTrack?.title ?? null,
+        artist: npTrack?.artist ?? null,
+        album: npTrack?.album ?? null,
+        durationMs: npDuration,
+        positionMs: curPosRef.current,
+        playing: !!npTrack && npPlaying,
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [npTrack?.id, npTrack?.title, npTrack?.artist, npPlaying, npDuration]);
 
   // Single entry point for "this track ended → advance", debounced because a
   // lane can emit the end more than once (YouTube reports playerState 0
@@ -823,6 +1065,41 @@ export default function App() {
     }
   };
 
+  // Command-palette actions (navigation, modals, tools). Rebuilt each render so
+  // labels/handlers stay fresh; only realized when the palette is open.
+  const paletteActions: PaletteAction[] = [
+    { id: "all", label: "Go to All Tracks", run: () => setView({ kind: "all" }) },
+    { id: "fav", label: "Go to My Favorites", run: () => setView({ kind: "favorites" }) },
+    { id: "feed", label: "Go to MusicPax Feed", run: () => setView({ kind: "feed" }) },
+    {
+      id: "mode",
+      label: curator ? "Switch to Listen mode" : "Switch to Curate mode",
+      run: () => changeMode(curator ? "listening" : "curator"),
+    },
+    { id: "settings", label: "Open Settings", run: () => setSettingsOpen(true) },
+    { id: "viz", label: "Open Visualizer", run: () => setVisualizerOpen(true) },
+    { id: "mini", label: "Open Mini Player", run: () => toggleMini(true) },
+    { id: "yt", label: "Search YouTube", hint: "add music", run: () => setYtSearchOpen(true) },
+    {
+      id: "spotify",
+      label: "Import Spotify Playlist",
+      hint: "add music",
+      run: () => setAddUrlMode("spotify"),
+    },
+    { id: "folder", label: "Import Music Folder", hint: "add music", run: () => handleImport() },
+    { id: "mpx", label: "Import .mpx Playlist", hint: "add music", run: () => handleImportMpx() },
+    {
+      id: "repair",
+      label: "Repair Dead Links",
+      hint: "re-resolve dead YouTube streams",
+      run: () => handleRepair(),
+    },
+    { id: "golive", label: "Go Live", hint: "broadcast", run: () => setGoLiveOpen(true) },
+    ...(aiLabel
+      ? [{ id: "ai", label: "AI Assistant", run: () => setAiAssistantOpen(true) }]
+      : []),
+  ];
+
   return (
     <div className="app">
       <header className="app-header">
@@ -845,53 +1122,64 @@ export default function App() {
                   </option>
                 ))}
               </select>
+              <button
+                className="settings-button brand-youtube"
+                onClick={() => setYtSearchOpen(true)}
+                title="Search YouTube"
+                aria-label="Search YouTube"
+              >
+                <YouTubeIcon size={18} />
+              </button>
+              <button
+                className="settings-button brand-spotify"
+                onClick={() => setAddUrlMode("spotify")}
+                title="Import Spotify Playlist"
+                aria-label="Import Spotify Playlist"
+              >
+                <SpotifyIcon size={18} />
+              </button>
               <ManageMusicMenu
                 busy={busy}
                 canEnrich={source === "library" && tracks.length > 0 && enrichProgress == null}
                 onAir={onAir}
                 onImportFolder={handleImport}
                 onImportMpx={handleImportMpx}
-                onAddYouTube={() => setAddUrlMode("youtube")}
-                onAddSpotify={() => setAddUrlMode("spotify")}
-                onSearchYouTube={() => setYtSearchOpen(true)}
                 onClean={handleCleanAll}
                 onEnrich={handleEnrichAll}
+                onRepair={handleRepair}
                 aiAvailable={!!aiLabel}
                 onAiAssistant={() => setAiAssistantOpen(true)}
                 onGoLive={() => setGoLiveOpen(true)}
               />
             </>
           )}
-          <button
-            className="settings-button"
-            onClick={() => toggleMini(true)}
-            title="Mini player"
-          >
-            <PictureInPicture2 size={16} />
-          </button>
-          <button
-            className={`settings-button${visualizerOpen ? " active" : ""}`}
-            onClick={() => (visualizerOpen ? closeVisualizer() : setVisualizerOpen(true))}
-            disabled={!visualizerOpen && !detailTrack}
-            title={visualizerOpen ? "Exit visualizer" : "Audio visualizer"}
-          >
-            <AudioLines size={16} />
-          </button>
-          <button
-            className="settings-button"
-            onClick={() => setTheater(!theater)}
-            disabled={!theater && !detailTrack}
-            title={theater ? "Exit full screen" : "Full screen (theater)"}
-          >
-            {theater ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-          </button>
-          <button
-            className="settings-button"
-            onClick={() => setSettingsOpen(true)}
-            title="Settings"
-          >
-            <SettingsIcon size={16} />
-          </button>
+          {!curator && (
+            <>
+              <button
+                className="settings-button"
+                onClick={() => toggleMini(true)}
+                title="Mini player"
+              >
+                <PictureInPicture2 size={16} />
+              </button>
+              <button
+                className={`settings-button${visualizerOpen ? " active" : ""}`}
+                onClick={() => (visualizerOpen ? closeVisualizer() : setVisualizerOpen(true))}
+                disabled={!visualizerOpen && !detailTrack}
+                title={visualizerOpen ? "Exit visualizer" : "Audio visualizer"}
+              >
+                <AudioLines size={16} />
+              </button>
+              <button
+                className="settings-button"
+                onClick={() => setTheater(!theater)}
+                disabled={!theater && !detailTrack}
+                title={theater ? "Exit full screen" : "Full screen (theater)"}
+              >
+                {theater ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+              </button>
+            </>
+          )}
           <ModeMenu
             mode={mode}
             onMode={changeMode}
@@ -917,6 +1205,26 @@ export default function App() {
             {enrichProgress.proposed} found · AI ${enrichProgress.spentUsd.toFixed(2)}
             {enrichProgress.capped ? " · cap reached (free tiers only)" : ""}
             {enrichProgress.current ? ` · ${enrichProgress.current}` : ""}
+          </div>
+        </div>
+      )}
+
+      {repairProgress && (
+        <div className="enrich-banner">
+          <div className="mirror-progress-bar">
+            <div
+              className="mirror-progress-fill"
+              style={{
+                width: `${
+                  repairProgress.total ? (repairProgress.done / repairProgress.total) * 100 : 0
+                }%`,
+              }}
+            />
+          </div>
+          <div className="mirror-progress-text">
+            {repairProgress.phase === "checking"
+              ? `Checking streams ${repairProgress.done}/${repairProgress.total} for dead links…`
+              : `Re-resolving ${repairProgress.done}/${repairProgress.total} · ${repairProgress.healed} healed`}
           </div>
         </div>
       )}
@@ -947,7 +1255,7 @@ export default function App() {
               onError={showStatus}
             />
             <LibraryTable
-              tracks={tracks}
+              tracks={displayTracks}
               onArtist={filterByArtist}
               searchable
               query={query}
@@ -957,6 +1265,8 @@ export default function App() {
               onActivate={playTrack}
               onEdit={setEditTrack}
               onEnrich={handleEnrichTrack}
+              onToggleFavorite={toggleFavorite}
+              visibleColumns={columnPrefs}
               curator={curator}
               enrichingId={enrichingId}
               nowPlayingId={
@@ -974,6 +1284,9 @@ export default function App() {
               }}
               mediaType={mediaTypeFilter}
               onMediaType={setMediaTypeFilter}
+              listenOrder={listenOrder}
+              onListenOrderChange={changeListenOrder}
+              onReshuffle={reshuffle}
             />
           </div>
         </div>
@@ -1115,12 +1428,19 @@ export default function App() {
             />
           ) : (
           <LibraryTable
-            tracks={tracks}
+            tracks={displayTracks}
             onArtist={filterByArtist}
             fadeKey={
               view.kind === "playlist" ? `p${view.id}` : `${view.kind}:${artistFilter ?? ""}`
             }
-            heading={artistFilter ?? (view.kind === "playlist" ? view.name : undefined)}
+            heading={
+              artistFilter ??
+              (view.kind === "playlist"
+                ? view.name
+                : view.kind === "favorites"
+                  ? "My Favorites"
+                  : undefined)
+            }
             onRenameHeading={
               view.kind === "playlist"
                 ? (name) => {
@@ -1136,7 +1456,12 @@ export default function App() {
                   }
                 : undefined
             }
-            searchable={view.kind === "all" && !artistFilter}
+            searchable={(view.kind === "all" || view.kind === "favorites") && !artistFilter}
+            emptyMessage={
+              view.kind === "favorites"
+                ? "No favorites yet — tap the heart on any track to add it."
+                : undefined
+            }
             query={query}
             onQueryChange={setQuery}
             sort={sort}
@@ -1144,6 +1469,8 @@ export default function App() {
             onActivate={playTrack}
             onEdit={setEditTrack}
             onEnrich={handleEnrichTrack}
+            onToggleFavorite={toggleFavorite}
+            visibleColumns={columnPrefs}
             curator={curator}
             enrichingId={enrichingId}
             nowPlayingId={
@@ -1164,8 +1491,29 @@ export default function App() {
             }}
             mediaType={mediaTypeFilter}
             onMediaType={setMediaTypeFilter}
+            listenOrder={listenOrder}
+            onListenOrderChange={changeListenOrder}
+            onReshuffle={reshuffle}
             missingIds={missingIds}
             onRelink={relinkFile}
+            onBulkDelete={async (ids) => {
+              const removed = await ipc.deleteTracks(ids);
+              const idset = new Set(ids);
+              // If a deleted track was playing or docked, stop it.
+              if (stream && idset.has(stream.id)) {
+                setStream(null);
+                ipc.stop().catch(() => {});
+              }
+              if (now && idset.has(now.track.id)) {
+                setNow(null);
+                ipc.stop().catch(() => {});
+              }
+              refreshPlaylists();
+              refreshTracks();
+              showStatus(
+                `Deleted ${removed} track${removed === 1 ? "" : "s"} from the library`,
+              );
+            }}
             onShare={
               view.kind === "playlist"
                 ? () => setShareTarget({ id: view.id, name: view.name })
@@ -1251,6 +1599,7 @@ export default function App() {
           }}
           onEnded={() => advanceFromEnd(stream.id)}
           onClose={() => setStream(null)}
+          onFatalError={handleStreamFatal}
           theaterRect={videoRect}
         />
       )}
@@ -1365,6 +1714,17 @@ export default function App() {
         />
       )}
 
+      {paletteOpen && (
+        <CommandPalette
+          onClose={() => setPaletteOpen(false)}
+          actions={paletteActions}
+          tracks={tracks}
+          playlists={playlists}
+          onPlayTrack={playTrack}
+          onOpenPlaylist={(id, name) => setView({ kind: "playlist", id, name })}
+        />
+      )}
+
       {settingsOpen && (
         <SettingsPanel
           onClose={() => setSettingsOpen(false)}
@@ -1375,6 +1735,8 @@ export default function App() {
               .then(setFormatLabel)
               .catch(() => {});
           }}
+          columnPrefs={columnPrefs}
+          onColumnPref={setColumnPref}
         />
       )}
 
