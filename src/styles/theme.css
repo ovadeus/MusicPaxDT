@@ -687,8 +687,9 @@ button svg,
   border-color: var(--accent);
 }
 
-/* Standalone Curator quick-add buttons: brand-tinted icons for the two primary
-   ways to find & add tracks (Search YouTube / Import Spotify Playlist). */
+/* Standalone Curator quick-add buttons: tinted icons for the three primary
+   ways to find & add tracks (Search YouTube / Import Spotify Playlist / Build
+   Playlist with AI). */
 .settings-button.brand-youtube {
   color: #ff0033;
   display: inline-flex;
@@ -699,9 +700,49 @@ button svg,
   display: inline-flex;
   align-items: center;
 }
+.settings-button.brand-ai {
+  color: #a78bfa;
+  display: inline-flex;
+  align-items: center;
+}
 .settings-button.brand-youtube:hover,
-.settings-button.brand-spotify:hover {
+.settings-button.brand-spotify:hover,
+.settings-button.brand-ai:hover {
   border-color: currentColor;
+}
+
+/* Build Playlist with AI: track-count row under the prompt. */
+.aibuild-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.aibuild-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.aibuild-count input {
+  width: 64px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 5px 8px;
+  font-size: 13px;
+  font-family: inherit;
+}
+.aibuild-max {
+  opacity: 0.7;
+}
+.aibuild-provider {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .settings-overlay {

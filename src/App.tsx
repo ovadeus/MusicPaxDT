@@ -10,7 +10,7 @@ import {
   PictureInPicture2,
 } from "lucide-react";
 import MpxLogo from "./components/MpxLogo";
-import { YouTubeIcon, SpotifyIcon } from "./components/BrandIcons";
+import { YouTubeIcon, SpotifyIcon, AiIcon } from "./components/BrandIcons";
 import CommandPalette, { type PaletteAction } from "./components/CommandPalette";
 import AIAssistantModal from "./components/AIAssistantModal";
 import ManageMusicMenu from "./components/ManageMusicMenu";
@@ -24,6 +24,7 @@ import {
 } from "./lib/columnPrefs";
 import GoLivePanel from "./components/GoLivePanel";
 import AddUrlModal from "./components/AddUrlModal";
+import BuildPlaylistWithAIModal from "./components/BuildPlaylistWithAIModal";
 import SharePlaylistModal from "./components/SharePlaylistModal";
 import YouTubeSearchView from "./components/YouTubeSearchView";
 import EnrichReviewModal from "./components/EnrichReviewModal";
@@ -146,6 +147,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [addUrlMode, setAddUrlMode] = useState<"youtube" | "spotify" | null>(null);
+  const [aiBuildOpen, setAiBuildOpen] = useState(false);
   const [shareTarget, setShareTarget] = useState<{ id: number; name: string } | null>(null);
   const [ytSearchOpen, setYtSearchOpen] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
@@ -1086,6 +1088,12 @@ export default function App() {
       hint: "add music",
       run: () => setAddUrlMode("spotify"),
     },
+    {
+      id: "aibuild",
+      label: "Build Playlist with AI",
+      hint: "add music",
+      run: () => setAiBuildOpen(true),
+    },
     { id: "folder", label: "Import Music Folder", hint: "add music", run: () => handleImport() },
     { id: "mpx", label: "Import .mpx Playlist", hint: "add music", run: () => handleImportMpx() },
     {
@@ -1137,6 +1145,14 @@ export default function App() {
                 aria-label="Import Spotify Playlist"
               >
                 <SpotifyIcon size={18} />
+              </button>
+              <button
+                className="settings-button brand-ai"
+                onClick={() => setAiBuildOpen(true)}
+                title="Build Playlist with AI"
+                aria-label="Build Playlist with AI"
+              >
+                <AiIcon size={18} />
               </button>
               <ManageMusicMenu
                 busy={busy}
@@ -1749,6 +1765,23 @@ export default function App() {
             showStatus(msg);
             refreshPlaylists();
             refreshTracks();
+          }}
+        />
+      )}
+
+      {aiBuildOpen && (
+        <BuildPlaylistWithAIModal
+          providerLabel={aiLabel}
+          onClose={() => setAiBuildOpen(false)}
+          onError={showStatus}
+          onDone={(msg) => {
+            showStatus(msg);
+            refreshPlaylists();
+            refreshTracks();
+          }}
+          onOpenSettings={() => {
+            setAiBuildOpen(false);
+            setSettingsOpen(true);
           }}
         />
       )}

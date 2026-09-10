@@ -7,11 +7,14 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
+use crate::ai::PLAYLIST_MAX_TRACKS;
+use crate::commands::enrich::resolve_llm;
 use crate::error::{AppError, AppResult};
 use crate::library::db;
 use crate::library::model::{Capability, NewTrack, PlaylistInfo, Track};
 use crate::net::{http, keyring_get, keyring_set};
 use crate::sources::radio::{self, RadioStation};
+use crate::sources::spotify::ListedTrack;
 use crate::sources::{detect, spotify, youtube, DetectedInput};
 use crate::state::{lock_unpoisoned, AppState};
 
@@ -398,6 +401,93 @@ pub async fn mirror_playlist(
         return Err(AppError::Other("no tracks found in that input".into()));
     }
 
+    mirror_listed_tracks(name, wanted, &app, &state).await
+}
+
+/// Default track count for an AI-built playlist when the UI sends none.
+const AI_PLAYLIST_DEFAULT_TRACKS: usize = 25;
+
+/// AI front door to the Mirror Engine: the configured LLM drafts an
+/// `Artist - Title` list from a natural-language request, then it is mirrored
+/// exactly like a pasted list — same YouTube search, same channel-authority
+/// ranking (Topic / official artist / VEVO first), same `mirror-progress`
+/// events. The LLM only names songs; it never touches audio (hard rule 2).
+#[tauri::command]
+pub async fn ai_build_playlist(
+    prompt: String,
+    count: Option<usize>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> AppResult<MirrorReport> {
+    let prompt = prompt.trim().to_string();
+    if prompt.is_empty() {
+        return Err(AppError::Other("describe the playlist you want".into()));
+    }
+    let count = count
+        .unwrap_or(AI_PLAYLIST_DEFAULT_TRACKS)
+        .clamp(1, PLAYLIST_MAX_TRACKS);
+
+    let db = state.db.clone();
+    let provider = tauri::async_runtime::spawn_blocking(move || {
+        let conn = lock_unpoisoned(&db);
+        resolve_llm(&conn)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("load task failed: {e}")))??
+    .ok_or_else(|| {
+        AppError::Other(
+            "No AI provider configured — add an API key or Ollama in Settings → Integrations."
+                .into(),
+        )
+    })?;
+
+    let draft = provider
+        .suggest_playlist(&prompt, count)
+        .await
+        .map_err(AppError::Other)?;
+    if draft.tracks.is_empty() {
+        return Err(AppError::Other(
+            "the AI didn't return any tracks — try rephrasing your request".into(),
+        ));
+    }
+
+    let name = draft
+        .name
+        .unwrap_or_else(|| playlist_name_from_prompt(&prompt));
+    let wanted: Vec<ListedTrack> = draft
+        .tracks
+        .into_iter()
+        .map(|t| ListedTrack {
+            title: t.title,
+            artist: t.artist,
+            duration_ms: None,
+        })
+        .collect();
+    mirror_listed_tracks(name, wanted, &app, &state).await
+}
+
+/// Fallback playlist name when the curator omits one: the request itself,
+/// collapsed to one line and trimmed to a sidebar-friendly length.
+fn playlist_name_from_prompt(prompt: &str) -> String {
+    const MAX_CHARS: usize = 60;
+    let one_line = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
+    if one_line.chars().count() <= MAX_CHARS {
+        return one_line;
+    }
+    let cut: String = one_line.chars().take(MAX_CHARS - 1).collect();
+    format!("{}…", cut.trim_end())
+}
+
+/// Resolve each wanted track to an official YouTube embed and file the matches
+/// in a new playlist, emitting `mirror-progress` as it goes. Shared by the
+/// Spotify / pasted-list mirror and the AI playlist builder so both lanes get
+/// identical matching.
+async fn mirror_listed_tracks(
+    name: String,
+    wanted: Vec<ListedTrack>,
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+) -> AppResult<MirrorReport> {
     let playlist_id = {
         let conn = lock_unpoisoned(&state.db);
         db::create_playlist(&conn, &name)?

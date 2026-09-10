@@ -20,6 +20,24 @@ export function YouTubeIcon({ size = 18, className }: IconProps) {
   );
 }
 
+/// "Sparkles" glyph for the AI playlist builder. Uses currentColor so the
+/// button's `color` drives the tint, matching the brand icons beside it.
+export function AiIcon({ size = 18, className }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M10 2.5l1.9 5.6 5.6 1.9-5.6 1.9L10 17.5l-1.9-5.6L2.5 10l5.6-1.9L10 2.5z" />
+      <path d="M18.5 13l1 3 3 1-3 1-1 3-1-3-3-1 3-1 1-3z" />
+    </svg>
+  );
+}
+
 /// Official Spotify glyph. Uses currentColor so the button's `color` drives the
 /// brand tint.
 export function SpotifyIcon({ size = 18, className }: IconProps) {

@@ -22,7 +22,7 @@ NOT Electron. NOT Web Audio as the core engine.
 Frontend (React) ⇄ Tauri IPC ⇄ Rust core.
 Rust modules: audio/ (engine, decode, meters, later: mixer, input, riaa,
 resample), library/ (db, model, scan), sources/ (adapter trait + per-source),
-ai/ (LLMProvider trait + anthropic/openai/ollama + mirror engine).
+ai/ (LLMProvider trait + anthropic/openai/gemini/ollama + mirror engine).
 Frontend: HiFi (receiver) mode and DJ mode share one library table. All Tauri
 calls go through src/lib/ipc.ts.
 
@@ -40,7 +40,8 @@ thiserror.
   Handle embed-disabled/region/age by falling back to next match or LINK_ONLY;
   re-resolve dead videos.
 - LLM: Anthropic Messages API (https://api.anthropic.com/v1/messages), OpenAI,
-  or Ollama (http://localhost:11434). Model is user-configurable; see
+  Google Gemini (generativelanguage.googleapis.com, key in the x-goog-api-key
+  header), or Ollama (http://localhost:11434). Model is user-configurable; see
   https://docs.claude.com/en/api for current Anthropic model IDs. Keys in OS
   keychain via keyring, never plaintext. Try free fingerprint/MusicBrainz before
   any paid LLM call; show cost estimate and a spend cap for cloud providers.
@@ -72,6 +73,16 @@ thiserror.
       source password in keychain (radioking_source_password). Recommended setup:
       RØDECaster mixes mic+music in hardware → its program is the aux/line-in source.
       TODO: Shoutcast handshake, AAC/Ogg, Radio King stats API (listeners/metadata).
+- M5b AI playlist builder ✅ done (2026-09-10) — third top-bar quick-add button
+      (YouTube / Spotify / AI) opens BuildPlaylistWithAIModal ("Build Playlist
+      With a Text Prompt", track count 1–100, default 25). ai_build_playlist
+      (commands/streams.rs) has the configured LlmProvider draft {name, tracks}
+      via ai::suggest_playlist, then runs the shared mirror_listed_tracks loop —
+      the same youtube::channel_authority ranking (Topic / official artist /
+      VEVO first) and mirror-progress events as a pasted Spotify list. Gemini
+      added as a fourth LlmProvider (gemini_api_key in keychain, default
+      gemini-2.5-flash); provider, model and key are the existing Settings →
+      Integrations → AI provider controls, shared with cleanup and the Assistant.
 - M4  DJ mode: dual decks, crossfader, EQ, tempo, hot cues, loops; BPM/key.
 - M5  AI subsystem (Anthropic/OpenAI/Ollama) + fingerprint pipeline + Mirror
       Engine + embedded YouTube playback lane.
@@ -86,7 +97,7 @@ thiserror.
   found".
 - Metadata enrichment (ai/, enrich/, sources/musicbrainz.rs) runs free→paid:
   MusicBrainz text → Chromaprint(fpcalc)+AcoustID → LLM(cleanup)→MusicBrainz
-  confirm. Keys (AcoustID, Anthropic/OpenAI) in keychain via net::keyring_*.
+  confirm. Keys (AcoustID, Anthropic/OpenAI/Gemini) in keychain via net::keyring_*.
   fpcalc is an external binary resolved from settings→PATH→known paths (incl.
   Picard); bundle it as a Tauri sidecar for distribution. LLM spend is capped
   per batch (enrich.spend_cap_usd, default $1); free tiers ignore the cap.

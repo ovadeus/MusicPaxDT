@@ -27,6 +27,7 @@ pub struct EnrichIntegrationStatus {
     pub acoustid_key: bool,
     pub anthropic_key: bool,
     pub openai_key: bool,
+    pub gemini_key: bool,
     pub fpcalc_found: bool,
     pub fpcalc_path: Option<String>,
 }
@@ -50,6 +51,7 @@ pub async fn enrich_integration_status(
             acoustid_key: keyring_get("acoustid_key").is_some(),
             anthropic_key: keyring_get("anthropic_api_key").is_some(),
             openai_key: keyring_get("openai_api_key").is_some(),
+            gemini_key: keyring_get("gemini_api_key").is_some(),
             fpcalc_found: resolved.is_some(),
             fpcalc_path: resolved.map(|p| p.to_string_lossy().into_owned()),
         })
@@ -73,11 +75,17 @@ pub fn set_openai_key(key: String) -> AppResult<()> {
     keyring_set("openai_api_key", key.trim()).map_err(AppError::Other)
 }
 
+#[tauri::command]
+pub fn set_gemini_key(key: String) -> AppResult<()> {
+    keyring_set("gemini_api_key", key.trim()).map_err(AppError::Other)
+}
+
 // --- config assembly --------------------------------------------------------
 
-/// Resolve the LLM provider from settings (`enrich.ai_provider`, `enrich.ai_model`)
-/// + keychain. Returns None when the chosen provider has no credential.
-fn resolve_llm(conn: &rusqlite::Connection) -> AppResult<Option<LlmProvider>> {
+/// Resolve the LLM provider from settings (`enrich.ai_provider`,
+/// `enrich.model.<provider>`) + keychain. Returns None when the chosen provider
+/// has no credential. Shared with the AI playlist builder (commands::streams).
+pub(crate) fn resolve_llm(conn: &rusqlite::Connection) -> AppResult<Option<LlmProvider>> {
     let provider = db::get_setting(conn, "enrich.ai_provider")?.unwrap_or_else(|| "none".into());
     // Model is stored PER provider (`enrich.model.<provider>`) so an Ollama model
     // can't leak into an Anthropic request. A blank model falls back to the
@@ -92,6 +100,10 @@ fn resolve_llm(conn: &rusqlite::Connection) -> AppResult<Option<LlmProvider>> {
         "openai" => keyring_get("openai_api_key").map(|api_key| LlmProvider::OpenAi {
             api_key,
             model: model.unwrap_or_else(|| "gpt-4o-mini".into()),
+        }),
+        "gemini" => keyring_get("gemini_api_key").map(|api_key| LlmProvider::Gemini {
+            api_key,
+            model: model.unwrap_or_else(|| "gemini-2.5-flash".into()),
         }),
         "ollama" => {
             let host = db::get_setting(conn, "enrich.ollama_host")?

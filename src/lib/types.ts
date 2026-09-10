@@ -134,6 +134,7 @@ export interface EnrichIntegrationStatus {
   acoustidKey: boolean;
   anthropicKey: boolean;
   openaiKey: boolean;
+  geminiKey: boolean;
   fpcalcFound: boolean;
   fpcalcPath: string | null;
 }

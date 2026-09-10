@@ -303,6 +303,10 @@ export function setOpenaiKey(key: string): Promise<void> {
   return invoke<void>("set_openai_key", { key });
 }
 
+export function setGeminiKey(key: string): Promise<void> {
+  return invoke<void>("set_gemini_key", { key });
+}
+
 export function proposeEnrichment(
   trackIds: number[],
 ): Promise<EnrichProposeReport> {
@@ -410,6 +414,13 @@ export function youtubeSearch(
 
 export function mirrorPlaylist(input: string): Promise<MirrorReport> {
   return invoke<MirrorReport>("mirror_playlist", { input });
+}
+
+/// Build a playlist from a text prompt: the configured AI provider drafts an
+/// Artist - Title list (1–100 tracks), then it is mirrored to official YouTube
+/// embeds exactly like `mirrorPlaylist` — same `mirror-progress` events.
+export function aiBuildPlaylist(prompt: string, count: number): Promise<MirrorReport> {
+  return invoke<MirrorReport>("ai_build_playlist", { prompt, count });
 }
 
 /// Import a direct audio/video URL (e.g. an Archive.org file) as a

@@ -8,8 +8,17 @@ const AI_PROVIDERS = [
   { value: "none", label: "None (free tiers only)" },
   { value: "anthropic", label: "Anthropic (Claude)" },
   { value: "openai", label: "OpenAI" },
+  { value: "gemini", label: "Google Gemini" },
   { value: "ollama", label: "Ollama (local, free)" },
 ];
+
+/// Cloud providers that need an API key (keychain) and accept a model id.
+/// Defaults match `resolve_llm` in the Rust core.
+const CLOUD_AI: Record<string, { label: string; modelPlaceholder: string }> = {
+  anthropic: { label: "Anthropic", modelPlaceholder: "claude-opus-4-8" },
+  openai: { label: "OpenAI", modelPlaceholder: "gpt-4o-mini" },
+  gemini: { label: "Gemini", modelPlaceholder: "gemini-2.5-flash" },
+};
 
 interface Props {
   onClose: () => void;
@@ -110,6 +119,7 @@ export default function SettingsPanel({
     try {
       if (provider === "anthropic") await ipc.setAnthropicKey(aiKey);
       else if (provider === "openai") await ipc.setOpenaiKey(aiKey);
+      else if (provider === "gemini") await ipc.setGeminiKey(aiKey);
       setAiKey("");
       await refreshEnrich();
     } catch (e) {
@@ -158,9 +168,11 @@ export default function SettingsPanel({
   const aiModel = values[modelKey] ?? "";
   const spendCap = values["enrich.spend_cap_usd"] ?? "1.0";
   const ollamaHost = values["enrich.ollama_host"] ?? "http://localhost:11434";
+  const cloudAi = CLOUD_AI[aiProvider];
   const aiKeyConfigured =
     (aiProvider === "anthropic" && enrich?.anthropicKey) ||
-    (aiProvider === "openai" && enrich?.openaiKey);
+    (aiProvider === "openai" && enrich?.openaiKey) ||
+    (aiProvider === "gemini" && enrich?.geminiKey);
 
   return (
     <div className="settings-overlay" onClick={onClose}>
@@ -380,7 +392,7 @@ export default function SettingsPanel({
               </div>
 
               <label className="settings-field">
-                <span>AI provider (for messy-title cleanup)</span>
+                <span>AI provider (title cleanup, AI Assistant, playlist builder)</span>
                 <select
                   value={aiProvider}
                   onChange={(e) => update("enrich.ai_provider", e.target.value)}
@@ -393,23 +405,23 @@ export default function SettingsPanel({
                 </select>
               </label>
 
-              {(aiProvider === "anthropic" || aiProvider === "openai") && (
+              {cloudAi && (
                 <label className="settings-field">
                   <span>Model</span>
                   <input
                     key={modelKey}
                     type="text"
-                    placeholder={aiProvider === "anthropic" ? "claude-opus-4-8" : "gpt-4o-mini"}
+                    placeholder={cloudAi.modelPlaceholder}
                     defaultValue={aiModel}
                     onBlur={(e) => update(modelKey, e.target.value)}
                   />
                 </label>
               )}
 
-              {(aiProvider === "anthropic" || aiProvider === "openai") && (
+              {cloudAi && (
                 <div className="integration-row">
                   <span>
-                    {aiProvider === "anthropic" ? "Anthropic" : "OpenAI"} API key{" "}
+                    {cloudAi.label} API key{" "}
                     <em className={aiKeyConfigured ? "ok" : ""}>
                       {aiKeyConfigured ? "configured" : "not set"}
                     </em>
