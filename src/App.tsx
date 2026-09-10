@@ -25,6 +25,7 @@ import {
 import GoLivePanel from "./components/GoLivePanel";
 import AddUrlModal from "./components/AddUrlModal";
 import BuildPlaylistWithAIModal from "./components/BuildPlaylistWithAIModal";
+import WelcomeModal from "./components/WelcomeModal";
 import SharePlaylistModal from "./components/SharePlaylistModal";
 import YouTubeSearchView from "./components/YouTubeSearchView";
 import EnrichReviewModal from "./components/EnrichReviewModal";
@@ -148,6 +149,14 @@ export default function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [addUrlMode, setAddUrlMode] = useState<"youtube" | "spotify" | null>(null);
   const [aiBuildOpen, setAiBuildOpen] = useState(false);
+  // First-run welcome: shown until the user saves a key or skips (per install).
+  const [showWelcome, setShowWelcome] = useState(() => {
+    try {
+      return localStorage.getItem("musicpax.onboarded") !== "1";
+    } catch {
+      return false;
+    }
+  });
   const [shareTarget, setShareTarget] = useState<{ id: number; name: string } | null>(null);
   const [ytSearchOpen, setYtSearchOpen] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
@@ -196,31 +205,35 @@ export default function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [visualizerOpen, closeVisualizer]);
-  useEffect(() => {
-    if (settingsOpen) return; // re-check whenever the Settings dialog closes
-    // Gate AI features on the configured provider AND a key being present — but
-    // read both from plain DB settings, never the keychain. Reading the keychain
-    // on launch makes macOS prompt for the login password every start (the app
-    // isn't code-signed); Settings mirrors "key present" into enrich.key_set.*
-    // flags, and the actual key is only read later, when a feature runs. Cloud
-    // providers require the user's own key (so no one is billed for someone
-    // else's usage); local Ollama needs none.
+  // Gate AI features on the configured provider AND a key being present — but
+  // read both from plain DB settings, never the keychain. Reading the keychain
+  // on launch makes macOS prompt for the login password every start (the app
+  // isn't code-signed); Settings/onboarding mirror "key present" into
+  // enrich.key_set.* flags, and the actual key is only read later, when a
+  // feature runs. Cloud providers require the user's own key (so no one is
+  // billed for someone else's usage); local Ollama needs none.
+  const refreshAiLabel = useCallback(() => {
     ipc
       .getSettings()
       .then((s) => {
         const p = s["enrich.ai_provider"];
-        // A cloud provider is "ready" unless we KNOW its key is missing
-        // (flag === "0", written by Settings). An absent flag means we haven't
-        // checked yet (e.g. first launch after upgrade) — allow it optimistically
-        // rather than falsely locking a user who already has a key; if it turns
-        // out to be missing, the feature reports it and Settings then writes "0".
+        // "ready" unless we KNOW the key is missing (flag === "0", written by
+        // Settings/onboarding). An absent flag means we haven't checked yet
+        // (e.g. first launch after upgrade) — allow it optimistically rather than
+        // falsely locking a user who already has a key; if it's actually missing
+        // the feature reports it and the flag then becomes "0".
         const ready =
           p === "ollama" ||
           (!!p && p !== "none" && s[`enrich.key_set.${p}`] !== "0");
         setAiLabel(ready ? p : null);
       })
       .catch(() => setAiLabel(null));
-  }, [settingsOpen]);
+  }, []);
+
+  useEffect(() => {
+    if (settingsOpen) return; // re-check whenever the Settings dialog closes
+    refreshAiLabel();
+  }, [settingsOpen, refreshAiLabel]);
   // Theater (in-app fullscreen) for the now-playing media.
   const [mini, setMini] = useState(false);
   const [miniVideo, setMiniVideo] = useState(false);
@@ -1822,6 +1835,24 @@ export default function App() {
           onOpenSettings={() => {
             setAiBuildOpen(false);
             setSettingsOpen(true);
+          }}
+        />
+      )}
+
+      {showWelcome && (
+        <WelcomeModal
+          onError={showStatus}
+          onComplete={(saved) => {
+            try {
+              localStorage.setItem("musicpax.onboarded", "1");
+            } catch {
+              /* private mode / storage disabled — onboarding just re-shows */
+            }
+            setShowWelcome(false);
+            if (saved) {
+              refreshAiLabel();
+              showStatus("AI features enabled");
+            }
           }}
         />
       )}
