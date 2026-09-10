@@ -71,8 +71,25 @@ export default function SettingsPanel({
   const [detecting, setDetecting] = useState(false);
   const [detectErr, setDetectErr] = useState<string | null>(null);
 
+  // Keychain reads happen only here (Settings is open = a user action), never at
+  // launch. Mirror "is a key present" into plain settings flags so the app can
+  // gate AI features on startup without touching the keychain (which would make
+  // an unsigned build prompt for the login password every launch).
   const refreshEnrich = () =>
-    ipc.enrichIntegrationStatus().then(setEnrich).catch(() => {});
+    ipc
+      .enrichIntegrationStatus()
+      .then((s) => {
+        setEnrich(s);
+        const flags: Record<string, boolean> = {
+          anthropic: s.anthropicKey,
+          openai: s.openaiKey,
+          gemini: s.geminiKey,
+        };
+        for (const [provider, present] of Object.entries(flags)) {
+          ipc.setSetting(`enrich.key_set.${provider}`, present ? "1" : "0").catch(() => {});
+        }
+      })
+      .catch(() => {});
 
   useEffect(() => {
     ipc
@@ -429,12 +446,15 @@ export default function SettingsPanel({
                   <div className="integration-inputs">
                     <input
                       type="password"
-                      placeholder="Paste API key"
+                      autoComplete="off"
+                      // The real key never leaves the keychain; when one is saved
+                      // we show dots so the field reads as "set" rather than empty.
+                      placeholder={aiKeyConfigured ? "••••••••••••••••" : "Paste API key"}
                       value={aiKey}
                       onChange={(e) => setAiKey(e.target.value)}
                     />
                     <button onClick={() => saveAiKey(aiProvider)} disabled={!aiKey.trim()}>
-                      Save
+                      {aiKeyConfigured ? "Replace" : "Save"}
                     </button>
                   </div>
                 </div>

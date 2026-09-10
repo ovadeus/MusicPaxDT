@@ -170,11 +170,16 @@ export default function BuildPlaylistWithAIModal({
           </>
         ) : (
           <>
-            <p className="settings-hint">
-              Add an Anthropic, OpenAI, or Gemini API key — or point at a local
-              Ollama — under <strong>Settings → Integrations → AI provider</strong> to
-              build playlists from a text prompt.
-            </p>
+            <div className="ai-locked-note">
+              <p>
+                <strong>You must add an AI API key to use this feature.</strong>
+              </p>
+              <p>
+                Open <strong>Settings → Integrations → AI provider</strong> and add
+                your own Anthropic, OpenAI, or Gemini key (or pick a local Ollama
+                model). Each person uses their own key — nothing is shared.
+              </p>
+            </div>
             <div className="addurl-actions">
               <button className="import-button" onClick={onOpenSettings}>
                 Open Settings

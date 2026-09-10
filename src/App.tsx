@@ -198,15 +198,26 @@ export default function App() {
   }, [visualizerOpen, closeVisualizer]);
   useEffect(() => {
     if (settingsOpen) return; // re-check whenever the Settings dialog closes
-    // Gate the AI Assistant menu on the configured provider (a DB setting), NOT
-    // on reading the API key. Reading the keychain on launch makes macOS prompt
-    // for the login password every start (the app isn't code-signed); the key is
-    // only read later, when the assistant actually runs.
+    // Gate AI features on the configured provider AND a key being present — but
+    // read both from plain DB settings, never the keychain. Reading the keychain
+    // on launch makes macOS prompt for the login password every start (the app
+    // isn't code-signed); Settings mirrors "key present" into enrich.key_set.*
+    // flags, and the actual key is only read later, when a feature runs. Cloud
+    // providers require the user's own key (so no one is billed for someone
+    // else's usage); local Ollama needs none.
     ipc
       .getSettings()
       .then((s) => {
         const p = s["enrich.ai_provider"];
-        setAiLabel(p && p !== "none" ? p : null);
+        // A cloud provider is "ready" unless we KNOW its key is missing
+        // (flag === "0", written by Settings). An absent flag means we haven't
+        // checked yet (e.g. first launch after upgrade) — allow it optimistically
+        // rather than falsely locking a user who already has a key; if it turns
+        // out to be missing, the feature reports it and Settings then writes "0".
+        const ready =
+          p === "ollama" ||
+          (!!p && p !== "none" && s[`enrich.key_set.${p}`] !== "0");
+        setAiLabel(ready ? p : null);
       })
       .catch(() => setAiLabel(null));
   }, [settingsOpen]);

@@ -745,6 +745,25 @@ button svg,
   text-overflow: ellipsis;
 }
 
+/* "Add a key to use AI" notice shown when no provider/key is configured. */
+.ai-locked-note {
+  margin: 4px 0 14px;
+  padding: 12px 14px;
+  background: var(--accent-soft);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.ai-locked-note p {
+  margin: 0 0 8px;
+}
+.ai-locked-note p:last-child {
+  margin-bottom: 0;
+  color: var(--text-dim);
+}
+
 .settings-overlay {
   position: fixed;
   inset: 0;
