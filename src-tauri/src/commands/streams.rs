@@ -1040,6 +1040,24 @@ pub async fn add_to_playlist(
     .map_err(|e| AppError::Other(format!("playlist task failed: {e}")))?
 }
 
+/// Append a batch of tracks to a playlist in one transaction, skipping any
+/// already present. Returns the number newly added. Backs "add selected tracks
+/// to playlist" and "new playlist from selected tracks".
+#[tauri::command]
+pub async fn add_tracks_to_playlist(
+    playlist_id: i64,
+    track_ids: Vec<i64>,
+    state: State<'_, AppState>,
+) -> AppResult<usize> {
+    let db_arc = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = lock_unpoisoned(&db_arc);
+        db::add_tracks_to_playlist(&conn, playlist_id, &track_ids)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("playlist task failed: {e}")))?
+}
+
 #[tauri::command]
 pub async fn delete_playlist(playlist_id: i64, state: State<'_, AppState>) -> AppResult<()> {
     let db_arc = state.db.clone();

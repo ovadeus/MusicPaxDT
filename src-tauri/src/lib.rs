@@ -144,6 +144,7 @@ pub fn run() {
             commands::streams::move_playlist_to_folder,
             commands::streams::reorder_playlist_folders,
             commands::streams::add_to_playlist,
+            commands::streams::add_tracks_to_playlist,
             commands::streams::delete_playlist,
             commands::streams::rename_playlist,
             commands::streams::import_mpx_playlist,

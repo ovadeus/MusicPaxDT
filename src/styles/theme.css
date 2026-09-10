@@ -3475,6 +3475,99 @@ input[type="range"] {
   cursor: default;
 }
 
+/* Bulk playlist actions: New Playlist / Add to (match the neutral controls). */
+.bulk-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--text-dim);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.bulk-action:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+/* Inline "name your new playlist" field, mirroring the sidebar rename input. */
+.bulk-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.bulk-name input {
+  height: 32px;
+  padding: 0 10px;
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+  width: 180px;
+}
+.bulk-create {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  background: var(--accent);
+  color: #0c1016;
+  font-weight: 600;
+  border: none;
+  border-radius: 7px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.bulk-create:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+/* Add-to-playlist popover anchored under its button. */
+.bulk-addwrap {
+  position: relative;
+  display: inline-flex;
+}
+.bulk-addmenu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 30;
+  min-width: 180px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--panel, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.bulk-addmenu button {
+  text-align: left;
+  padding: 7px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bulk-addmenu button:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
 /* Left-side checkbox column in list view. */
 .library-table th.sel-col,
 .library-table td.sel-col {

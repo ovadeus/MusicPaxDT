@@ -644,6 +644,44 @@ pub fn add_to_playlist(conn: &Connection, playlist_id: i64, track_id: i64) -> Ap
     Ok(())
 }
 
+/// Append many tracks to a playlist in one transaction, preserving the given
+/// order and skipping tracks already in the playlist (so a repeated "add
+/// selected" can't create duplicate rows). Returns how many were newly added.
+pub fn add_tracks_to_playlist(
+    conn: &Connection,
+    playlist_id: i64,
+    track_ids: &[i64],
+) -> AppResult<usize> {
+    let tx = conn.unchecked_transaction()?;
+    let mut existing: std::collections::HashSet<i64> = {
+        let mut stmt =
+            tx.prepare("SELECT track_id FROM playlist_items WHERE playlist_id = ?1")?;
+        let rows = stmt.query_map([playlist_id], |r| r.get::<_, i64>(0))?;
+        rows.collect::<Result<_, _>>()?
+    };
+    let mut position: i64 = tx.query_row(
+        "SELECT COALESCE(MAX(position), 0) FROM playlist_items WHERE playlist_id = ?1",
+        [playlist_id],
+        |r| r.get(0),
+    )?;
+    let mut added = 0usize;
+    for &track_id in track_ids {
+        // Skip duplicates, both against existing rows and within this batch.
+        if !existing.insert(track_id) {
+            continue;
+        }
+        position += 1;
+        tx.execute(
+            "INSERT INTO playlist_items(playlist_id, track_id, position)
+             VALUES (?1, ?2, ?3)",
+            params![playlist_id, track_id, position],
+        )?;
+        added += 1;
+    }
+    tx.commit()?;
+    Ok(added)
+}
+
 pub fn delete_playlist(conn: &Connection, playlist_id: i64) -> AppResult<()> {
     let tx = conn.unchecked_transaction()?;
     tx.execute("DELETE FROM playlist_items WHERE playlist_id = ?1", [playlist_id])?;
@@ -855,6 +893,34 @@ mod tests {
         assert!(list_playlists(&conn).unwrap().is_empty());
         // tracks survive playlist deletion
         assert_eq!(list_tracks(&conn, None, None, None, 10, 0).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn add_tracks_batch_preserves_order_and_skips_duplicates() {
+        let conn = mem_db();
+        for (i, name) in ["A", "B", "C"].iter().enumerate() {
+            insert_track(&conn, &new_track(name, "Artist", &format!("/m/{name}.flac")), i as i64)
+                .unwrap();
+        }
+        let ids: Vec<i64> = list_tracks(&conn, None, Some("added_at:asc"), None, 10, 0)
+            .unwrap()
+            .iter()
+            .map(|t| t.id)
+            .collect();
+        let pid = create_playlist(&conn, "Batch").unwrap();
+
+        // First add C then A, in that order.
+        let added = add_tracks_to_playlist(&conn, pid, &[ids[2], ids[0]]).unwrap();
+        assert_eq!(added, 2);
+
+        // Re-add A (already present, in-batch dup of B) plus B twice → only B lands.
+        let added = add_tracks_to_playlist(&conn, pid, &[ids[0], ids[1], ids[1]]).unwrap();
+        assert_eq!(added, 1);
+
+        let items = playlist_tracks(&conn, pid).unwrap();
+        let order: Vec<&str> = items.iter().map(|t| t.title.as_deref().unwrap()).collect();
+        assert_eq!(order, vec!["C", "A", "B"], "append order preserved, no dupes");
+        assert_eq!(list_playlists(&conn).unwrap()[0].track_count, 3);
     }
 
     #[test]

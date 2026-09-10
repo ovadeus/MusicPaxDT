@@ -1530,6 +1530,35 @@ export default function App() {
                 `Deleted ${removed} track${removed === 1 ? "" : "s"} from the library`,
               );
             }}
+            onBulkAddToPlaylist={async (playlistId, ids) => {
+              try {
+                const added = await ipc.addTracksToPlaylist(playlistId, ids);
+                refreshPlaylists();
+                if (view.kind === "playlist" && view.id === playlistId) refreshTracks();
+                const skipped = ids.length - added;
+                showStatus(
+                  `Added ${added} track${added === 1 ? "" : "s"} to playlist` +
+                    (skipped > 0 ? ` (${skipped} already there)` : ""),
+                );
+              } catch (e) {
+                showStatus(`${e}`);
+                throw e; // let the table keep the selection so the user can retry
+              }
+            }}
+            onCreatePlaylistWithTracks={async (name, ids) => {
+              try {
+                const id = await ipc.createPlaylist(name);
+                const added = await ipc.addTracksToPlaylist(id, ids);
+                refreshPlaylists();
+                setView({ kind: "playlist", id, name });
+                showStatus(
+                  `Created “${name}” with ${added} track${added === 1 ? "" : "s"}`,
+                );
+              } catch (e) {
+                showStatus(`${e}`);
+                throw e;
+              }
+            }}
             onShare={
               view.kind === "playlist"
                 ? () => setShareTarget({ id: view.id, name: view.name })

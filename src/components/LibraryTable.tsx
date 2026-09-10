@@ -10,8 +10,10 @@ import {
   LayoutGrid,
   Link as LinkIcon,
   List,
+  ListPlus,
   Music,
   Pencil,
+  Plus,
   RadioTower,
   Share2,
   Shuffle,
@@ -68,6 +70,10 @@ interface Props {
   /// Bulk-delete (curator only). When provided, a "Select" toggle appears; the
   /// user checks tracks and deletes them in one batch. Deletes from the library.
   onBulkDelete?: (ids: number[]) => Promise<void> | void;
+  /// Add the checked tracks to an existing playlist (one batch call).
+  onBulkAddToPlaylist?: (playlistId: number, ids: number[]) => Promise<void> | void;
+  /// Create a new playlist from the checked tracks.
+  onCreatePlaylistWithTracks?: (name: string, ids: number[]) => Promise<void> | void;
   /// Listen-mode presentation order. Hidden in Curator mode, where table-header
   /// sorting remains the main management affordance.
   listenOrder?: ListenOrder;
@@ -224,6 +230,8 @@ export default function LibraryTable(props: Props) {
     onRelink,
     onShare,
     onBulkDelete,
+    onBulkAddToPlaylist,
+    onCreatePlaylistWithTracks,
     listenOrder,
     onListenOrderChange,
     onReshuffle,
@@ -274,7 +282,15 @@ export default function LibraryTable(props: Props) {
   const [bulkMode, setBulkMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [deleting, setDeleting] = useState(false);
+  // Bulk playlist actions: an inline "name" field for a new playlist, and a
+  // popover picker for adding to an existing one.
+  const [working, setWorking] = useState(false);
+  const [naming, setNaming] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const addMenuRef = useRef<HTMLDivElement | null>(null);
   const lastIndexRef = useRef<number | null>(null);
+  const bulkBusy = deleting || working;
 
   // Checkboxes may only render where bulk delete is actually available (curator
   // + an onBulkDelete handler). This keeps a stale `bulkMode` from leaking
@@ -287,8 +303,23 @@ export default function LibraryTable(props: Props) {
   const exitBulk = () => {
     setBulkMode(false);
     setSelectedIds(new Set());
+    setNaming(false);
+    setNameDraft("");
+    setAddMenuOpen(false);
     lastIndexRef.current = null;
   };
+
+  // Close the "add to playlist" popover on an outside click.
+  useEffect(() => {
+    if (!addMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (addMenuRef.current && !addMenuRef.current.contains(e.target as Node)) {
+        setAddMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [addMenuOpen]);
 
   // Toggle one row; Shift extends the range from the last-clicked row (add-only).
   const toggleAt = (index: number, shiftKey: boolean) => {
@@ -337,6 +368,36 @@ export default function LibraryTable(props: Props) {
       clearSelection();
     } finally {
       setDeleting(false);
+    }
+  };
+
+  const runCreatePlaylist = async () => {
+    const ids = selectedVisible.map((t) => t.id);
+    const name = nameDraft.trim();
+    if (ids.length === 0 || !name || !onCreatePlaylistWithTracks) return;
+    setWorking(true);
+    try {
+      await onCreatePlaylistWithTracks(name, ids);
+      exitBulk(); // success only; on error the handler reports and we keep the selection
+    } catch {
+      /* error surfaced by the handler */
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const runAddToPlaylist = async (playlistId: number) => {
+    const ids = selectedVisible.map((t) => t.id);
+    if (ids.length === 0 || !onBulkAddToPlaylist) return;
+    setAddMenuOpen(false);
+    setWorking(true);
+    try {
+      await onBulkAddToPlaylist(playlistId, ids);
+      exitBulk();
+    } catch {
+      /* error surfaced by the handler */
+    } finally {
+      setWorking(false);
     }
   };
 
@@ -475,7 +536,7 @@ export default function LibraryTable(props: Props) {
           <div className="bulk-controls">
             <button
               className={`bulk-toggle${bulkMode ? " active" : ""}`}
-              title={bulkMode ? "Exit selection mode" : "Select multiple tracks to delete"}
+              title={bulkMode ? "Exit selection mode" : "Select multiple tracks"}
               aria-pressed={bulkMode}
               onClick={() => (bulkMode ? exitBulk() : setBulkMode(true))}
             >
@@ -486,24 +547,98 @@ export default function LibraryTable(props: Props) {
               <button
                 className="bulk-selectall"
                 onClick={allVisibleSelected ? clearSelection : selectAllVisible}
-                disabled={deleting || tracks.length === 0}
+                disabled={bulkBusy || tracks.length === 0}
               >
                 {allVisibleSelected ? "Deselect all" : "Select all"}
               </button>
             )}
-            {bulkMode && selectedVisible.length > 0 && (
-              <>
+            {bulkMode && selectedVisible.length > 0 && naming ? (
+              <div className="bulk-name">
+                <input
+                  autoFocus
+                  placeholder="New playlist name"
+                  value={nameDraft}
+                  disabled={bulkBusy}
+                  onChange={(e) => setNameDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") runCreatePlaylist();
+                    else if (e.key === "Escape") {
+                      setNaming(false);
+                      setNameDraft("");
+                    }
+                  }}
+                />
                 <button
-                  className="bulk-delete"
-                  onClick={runBulkDelete}
-                  disabled={deleting}
+                  className="bulk-create"
+                  onClick={runCreatePlaylist}
+                  disabled={bulkBusy || !nameDraft.trim()}
                 >
-                  <Trash2 size={14} /> Delete ({selectedVisible.length})
+                  Create ({selectedVisible.length})
                 </button>
-                <button className="bulk-clear" onClick={clearSelection} disabled={deleting}>
-                  Clear
+                <button
+                  className="bulk-clear"
+                  onClick={() => {
+                    setNaming(false);
+                    setNameDraft("");
+                  }}
+                  disabled={bulkBusy}
+                >
+                  Cancel
                 </button>
-              </>
+              </div>
+            ) : (
+              bulkMode &&
+              selectedVisible.length > 0 && (
+                <>
+                  {onCreatePlaylistWithTracks && (
+                    <button
+                      className="bulk-action"
+                      onClick={() => {
+                        setAddMenuOpen(false);
+                        setNaming(true);
+                      }}
+                      disabled={bulkBusy}
+                      title="Create a new playlist from the selected tracks"
+                    >
+                      <Plus size={14} /> New Playlist
+                    </button>
+                  )}
+                  {onBulkAddToPlaylist && playlists.length > 0 && (
+                    <div className="bulk-addwrap" ref={addMenuRef}>
+                      <button
+                        className="bulk-action"
+                        onClick={() => setAddMenuOpen((o) => !o)}
+                        disabled={bulkBusy}
+                        aria-expanded={addMenuOpen}
+                        aria-haspopup="menu"
+                        title="Add the selected tracks to an existing playlist"
+                      >
+                        <ListPlus size={14} /> Add to ▾
+                      </button>
+                      {addMenuOpen && (
+                        <div className="bulk-addmenu" role="menu">
+                          {playlists.map((p) => (
+                            <button
+                              key={p.id}
+                              role="menuitem"
+                              onClick={() => runAddToPlaylist(p.id)}
+                              disabled={bulkBusy}
+                            >
+                              {p.name}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <button className="bulk-delete" onClick={runBulkDelete} disabled={bulkBusy}>
+                    <Trash2 size={14} /> Delete ({selectedVisible.length})
+                  </button>
+                  <button className="bulk-clear" onClick={clearSelection} disabled={bulkBusy}>
+                    Clear
+                  </button>
+                </>
+              )
             )}
           </div>
         )}

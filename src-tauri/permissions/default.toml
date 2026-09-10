@@ -72,6 +72,7 @@ commands.allow = [
     "move_playlist_to_folder",
     "reorder_playlist_folders",
     "add_to_playlist",
+    "add_tracks_to_playlist",
     "delete_playlist",
     "rename_playlist",
     "import_mpx_playlist",

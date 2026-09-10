@@ -516,6 +516,15 @@ export function addToPlaylist(playlistId: number, trackId: number): Promise<void
   return invoke<void>("add_to_playlist", { playlistId, trackId });
 }
 
+/// Append many tracks to a playlist in one call, skipping any already present.
+/// Resolves to the number newly added.
+export function addTracksToPlaylist(
+  playlistId: number,
+  trackIds: number[],
+): Promise<number> {
+  return invoke<number>("add_tracks_to_playlist", { playlistId, trackIds });
+}
+
 export function deletePlaylist(playlistId: number): Promise<void> {
   return invoke<void>("delete_playlist", { playlistId });
 }
