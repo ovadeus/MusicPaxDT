@@ -875,6 +875,7 @@ mod tests {
             year: Some(1984),
             genre: Some("  ".into()), // whitespace → NULL
             media_type: None,
+            uri: None,
         };
         let updated = update_track_metadata(&conn, id, &edit).unwrap();
         assert_eq!(updated.title.as_deref(), Some("Smooth Operator"));
