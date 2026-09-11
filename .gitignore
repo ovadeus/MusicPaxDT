@@ -4,6 +4,8 @@ src-tauri/target/
 .DS_Store
 *.log
 
-# Notarization secrets — never commit
+# Secrets — never commit
 .env.notary
+.env
+handoff/share-server/.env
 *.p8

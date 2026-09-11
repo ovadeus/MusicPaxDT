@@ -11,7 +11,6 @@ interface Props {
   onPlayingChange: (playing: boolean) => void;
   onTime: (positionMs: number, durationMs: number) => void;
   onEnded: () => void;
-  onClose: () => void;
   /// The embed reported the current video is unplayable (removed / private /
   /// embed-disabled / region-blocked). Fired once per video so the app can
   /// auto-heal by re-resolving to a working replacement.
@@ -39,7 +38,7 @@ function videoIdFrom(uri: string): string | null {
 /// position all bridge over the IFrame API's postMessage protocol — the same
 /// mechanism react-player uses on musicpax.com.
 export default function StreamPlayer(props: Props) {
-  const { track, playing, volume, seekRequestMs, onSeeked, onClose } = props;
+  const { track, playing, volume, seekRequestMs, onSeeked } = props;
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const readyRef = useRef(false);
   // Docked: the player slides off-screen but stays mounted, so the audio
@@ -216,7 +215,11 @@ export default function StreamPlayer(props: Props) {
         >
           <ExternalLink size={13} />
         </a>
-        <button className="stream-player-close" onClick={onClose} title="Stop stream">
+        <button
+          className="stream-player-close"
+          onClick={() => setDocked(true)}
+          title="Hide the video — keeps playing (reopen from the tab)"
+        >
           <X size={14} />
         </button>
       </div>

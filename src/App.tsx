@@ -1667,7 +1667,6 @@ export default function App() {
             if (dur > 0) setStreamDur(dur);
           }}
           onEnded={() => advanceFromEnd(stream.id)}
-          onClose={() => setStream(null)}
           onFatalError={handleStreamFatal}
           theaterRect={videoRect}
         />
