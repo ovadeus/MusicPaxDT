@@ -3,3 +3,7 @@ dist/
 src-tauri/target/
 .DS_Store
 *.log
+
+# Notarization secrets — never commit
+.env.notary
+*.p8
