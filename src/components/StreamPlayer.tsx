@@ -58,6 +58,12 @@ export default function StreamPlayer(props: Props) {
   // Which video we've already reported as failed, so onError fires the app's
   // auto-heal at most once per video (avoids repeat calls while it re-resolves).
   const erroredRef = useRef<string | null>(null);
+  // After a track swap (loadVideoById) the embed emits transient state events —
+  // a brief "paused", or a stale "ended" from the outgoing video. If we forward
+  // those, the freshly-loaded track lands paused (or double-skips). Ignore
+  // pause/ended until the NEW video has actually reported "playing".
+  const lastLoadAtRef = useRef(Date.now());
+  const settledRef = useRef(false);
 
   const post = (func: string, args: unknown[] = []) => {
     iframeRef.current?.contentWindow?.postMessage(
@@ -69,6 +75,21 @@ export default function StreamPlayer(props: Props) {
   // Mount once: a persistent message listener + handshake. Not keyed on the
   // video, so switching tracks never tears the API connection down.
   useEffect(() => {
+    // Apply a YouTube player-state code (0 ended, 1 playing, 2 paused),
+    // suppressing the transient pause/ended the embed emits while a new track
+    // is loading — until that track reports "playing" (settledRef) or a short
+    // window elapses. Keeps switching tracks from landing paused / double-skipping.
+    const applyState = (n: number) => {
+      const swapping = !settledRef.current && Date.now() - lastLoadAtRef.current < 3000;
+      if (n === 1) {
+        settledRef.current = true;
+        cbRef.current.onPlayingChange(true);
+      } else if (n === 2) {
+        if (!swapping) cbRef.current.onPlayingChange(false);
+      } else if (n === 0) {
+        if (!swapping) cbRef.current.onEnded();
+      }
+    };
     const onMessage = (e: MessageEvent) => {
       if (typeof e.data !== "string" || !e.origin.includes("youtube")) return;
       let data: { event?: string; info?: unknown };
@@ -96,9 +117,7 @@ export default function StreamPlayer(props: Props) {
           cbRef.current.onFatalError?.(current);
         }
       } else if (data.event === "onStateChange" && typeof data.info === "number") {
-        if (data.info === 0) cbRef.current.onEnded();
-        else if (data.info === 1) cbRef.current.onPlayingChange(true);
-        else if (data.info === 2) cbRef.current.onPlayingChange(false);
+        applyState(data.info);
       } else if (data.event === "infoDelivery" && data.info && typeof data.info === "object") {
         const info = data.info as {
           currentTime?: number;
@@ -108,9 +127,7 @@ export default function StreamPlayer(props: Props) {
         // youtube-nocookie embeds deliver state through infoDelivery.playerState
         // — the standalone onStateChange event frequently never arrives over raw
         // postMessage, so end-of-video MUST be detected here or playlists stall.
-        if (info.playerState === 0) cbRef.current.onEnded();
-        else if (info.playerState === 1) cbRef.current.onPlayingChange(true);
-        else if (info.playerState === 2) cbRef.current.onPlayingChange(false);
+        if (typeof info.playerState === "number") applyState(info.playerState);
         if (typeof info.currentTime === "number") {
           cbRef.current.onTime(
             Math.round(info.currentTime * 1000),
@@ -145,6 +162,8 @@ export default function StreamPlayer(props: Props) {
     if (!videoId || loadedRef.current === videoId) return;
     loadedRef.current = videoId;
     erroredRef.current = null; // a fresh video may fail on its own merits
+    settledRef.current = false; // guard transient states until this one plays
+    lastLoadAtRef.current = Date.now();
     if (readyRef.current) post("loadVideoById", [videoId]);
   }, [videoId]);
 
