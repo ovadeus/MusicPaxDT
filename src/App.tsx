@@ -593,9 +593,9 @@ export default function App() {
       ipc.onPlaybackState(setPlayState),
       ipc.onRecordingState(setRecState),
       ipc.onEnrichProgress(setEnrichProgress),
-      ipc.onBroadcastState((s) => setOnAir(s.state !== "idle")),
+      ipc.onBroadcastState((s) => setOnAir(s.state !== "idle" && s.state !== "error")),
     ];
-    ipc.goLiveStatus().then((s) => setOnAir(s.state !== "idle")).catch(() => {});
+    ipc.goLiveStatus().then((s) => setOnAir(s.state !== "idle" && s.state !== "error")).catch(() => {});
     return () => {
       subs.forEach((p) => p.then((un) => un()));
     };

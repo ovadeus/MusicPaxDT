@@ -85,7 +85,10 @@ export default function GoLivePanel({
     };
   }, [onError]);
 
-  const live = status.state !== "idle";
+  // Fields lock only while a connection is actually being kept up. An error
+  // is exactly when they need editing — locking them there left the user
+  // staring at "check your source password" with no way to check it.
+  const live = status.state !== "idle" && status.state !== "error";
   const set = <K extends keyof BroadcastConfig>(key: K, value: BroadcastConfig[K]) =>
     setConfig((c) => (c ? { ...c, [key]: value } : c));
 
