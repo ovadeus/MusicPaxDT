@@ -117,6 +117,25 @@ fn migrate(conn: &Connection) -> AppResult<()> {
         tx.pragma_update(None, "user_version", 5)?;
         tx.commit()?;
     }
+    if version < 6 {
+        // Index the id-reference junction tables. `tracks` holds each track once
+        // (unique on uri); playlists / crates / history / cues reference it by
+        // track_id. Loading a playlist (WHERE playlist_id = ?) and deleting a
+        // track (cascade WHERE track_id = ?) were full table scans without these.
+        // Additive and behavior-preserving — just keeps lookups O(log n) as
+        // libraries, playlists, and history grow large.
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_playlist_items_playlist ON playlist_items(playlist_id);
+             CREATE INDEX IF NOT EXISTS idx_playlist_items_track    ON playlist_items(track_id);
+             CREATE INDEX IF NOT EXISTS idx_crate_items_crate       ON crate_items(crate_id);
+             CREATE INDEX IF NOT EXISTS idx_crate_items_track       ON crate_items(track_id);
+             CREATE INDEX IF NOT EXISTS idx_cues_track              ON cues(track_id);
+             CREATE INDEX IF NOT EXISTS idx_history_track           ON history(track_id);",
+        )?;
+        tx.pragma_update(None, "user_version", 6)?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
@@ -743,12 +762,38 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
         // FTS5 table exists and is queryable
         let count: i64 = conn
             .query_row("SELECT count(*) FROM tracks_fts", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn junction_tables_are_indexed() {
+        // Reference-by-id junction tables must be indexed so playlist loads and
+        // track-delete cascades stay fast at scale (millions of rows).
+        let conn = mem_db();
+        let names: Vec<String> = {
+            let mut stmt = conn
+                .prepare("SELECT name FROM sqlite_master WHERE type = 'index'")
+                .unwrap();
+            stmt.query_map([], |r| r.get::<_, String>(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        };
+        for want in [
+            "idx_playlist_items_playlist",
+            "idx_playlist_items_track",
+            "idx_crate_items_crate",
+            "idx_crate_items_track",
+            "idx_cues_track",
+            "idx_history_track",
+        ] {
+            assert!(names.iter().any(|n| n == want), "missing index: {want}");
+        }
     }
 
     #[test]
