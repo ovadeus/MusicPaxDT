@@ -224,9 +224,13 @@ export function musicPaxFeed(
   return invoke<FeedPage>("musicpax_feed", { page, limit, category: category ?? null });
 }
 
-/// Shrink the window into the floating, always-on-top mini player, or restore.
-export function setMiniWindow(mini: boolean): Promise<void> {
-  return invoke<void>("set_mini_window", { mini });
+/// The three player sizes: the full app, the floating mini card, and the
+/// super-compact micro bar. Mini and micro are always-on-top and fixed-size.
+export type WindowSize = "full" | "mini" | "micro";
+
+/// Resize the window to one of the player sizes.
+export function setWindowSize(size: WindowSize): Promise<void> {
+  return invoke<void>("set_window_size", { size });
 }
 
 /// Toggle the engine's visualizer audio tap (emits `audio-spectrum` while on).

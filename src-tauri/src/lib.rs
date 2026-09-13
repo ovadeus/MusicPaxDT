@@ -111,7 +111,7 @@ pub fn run() {
             commands::relink_track,
             commands::start_screen_audio,
             commands::stop_screen_audio,
-            commands::set_mini_window,
+            commands::set_window_size,
             commands::engine_status,
             commands::start_recording,
             commands::stop_recording,

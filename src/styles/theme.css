@@ -3162,18 +3162,23 @@ input[type="range"] {
 }
 
 .mini-titlebar {
+  position: relative;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
+  gap: 4px;
   height: 18px;
 }
 
+/* Absolutely centred so the brand stays put however many buttons sit beside it. */
 .mini-brand {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
   font-size: 10px;
   letter-spacing: 0.18em;
   font-weight: 700;
   color: var(--text-dim);
-  margin: 0 auto;
 }
 
 .mini-expand {
@@ -3290,6 +3295,55 @@ input[type="range"] {
 
 .mini-volume .volume-slider {
   flex: 1;
+}
+
+/* ---------- Micro player (the smallest size: no cover art) ---------- */
+.mini-player.micro {
+  justify-content: center;
+  padding: 10px 16px 12px;
+  gap: 9px;
+}
+
+.micro-top {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 20px;
+}
+
+.micro-top .mini-title {
+  max-width: calc(100% - 44px);
+}
+
+.micro-top .mini-expand {
+  position: absolute;
+  right: 0;
+}
+
+.micro-sliders {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-dim);
+}
+
+/* Seek takes the wider share; both shrink freely (min-width:auto would not). */
+.micro-sliders .seek-slider {
+  flex: 1 1 56%;
+  min-width: 0;
+}
+
+.micro-sliders .volume-slider {
+  flex: 1 1 44%;
+  min-width: 0;
+}
+
+.micro-time {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  margin-top: -4px;
 }
 
 /* Mini player cover↔video toggle (above the rect-positioned video, z 250) */

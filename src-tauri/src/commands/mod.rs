@@ -573,30 +573,41 @@ pub fn stop_screen_audio(state: State<'_, AppState>) {
     *lock_unpoisoned(&state.screen_audio) = None;
 }
 
-/// Toggle the compact "mini player" window: a small, fixed-size, floating,
-/// always-on-top card vs. the full app. In mini the window is locked
-/// (non-resizable) — only the in-app expand button restores the full size.
+/// Geometry for one of the three player sizes: `(width, height, min width,
+/// min height, floating)`. A floating size is its own minimum so the window
+/// can shrink below the full-app floor; only "full" is resizable and normally
+/// stacked. Anything unrecognised falls back to the full window.
+fn window_geometry(size: &str) -> (f64, f64, f64, f64, bool) {
+    match size {
+        "micro" => (360.0, 190.0, 360.0, 190.0, true),
+        "mini" => (360.0, 600.0, 360.0, 600.0, true),
+        _ => (1280.0, 800.0, 1080.0, 720.0, false),
+    }
+}
+
+/// Size the main window for one of the three player sizes: the full app, the
+/// floating "mini" card, or the super-compact "micro" bar (title + transport +
+/// sliders). Mini and micro are fixed-size and always-on-top; only the in-app
+/// grow button steps back up.
 #[tauri::command]
-pub fn set_mini_window(mini: bool, app: AppHandle) -> AppResult<()> {
+pub fn set_window_size(size: String, app: AppHandle) -> AppResult<()> {
     use tauri::{LogicalSize, Size};
     let win = app
         .get_webview_window("main")
         .ok_or_else(|| AppError::Other("main window not found".into()))?;
     let map = |r: Result<(), tauri::Error>| r.map_err(|e| AppError::Other(e.to_string()));
+    let (w, h, min_w, min_h, floating) = window_geometry(&size);
 
-    if mini {
-        // Lower the floor, shrink to the mini size, then lock it.
-        map(win.set_min_size(Some(Size::Logical(LogicalSize::new(360.0, 600.0)))))?;
-        map(win.set_size(Size::Logical(LogicalSize::new(360.0, 600.0))))?;
+    // Unlock first: a non-resizable window ignores programmatic resizes on
+    // macOS, so mini → micro would otherwise stay stuck at the mini size.
+    // Likewise lower the minimum before shrinking, or the new size is clamped.
+    map(win.set_resizable(true))?;
+    map(win.set_min_size(Some(Size::Logical(LogicalSize::new(min_w, min_h)))))?;
+    map(win.set_size(Size::Logical(LogicalSize::new(w, h))))?;
+    if floating {
         map(win.set_resizable(false))?;
-        let _ = win.set_always_on_top(true);
-    } else {
-        // Re-enable resizing before restoring the full size + floor.
-        map(win.set_resizable(true))?;
-        map(win.set_min_size(Some(Size::Logical(LogicalSize::new(1080.0, 720.0)))))?;
-        map(win.set_size(Size::Logical(LogicalSize::new(1280.0, 800.0))))?;
-        let _ = win.set_always_on_top(false);
     }
+    let _ = win.set_always_on_top(floating);
     Ok(())
 }
 
@@ -722,4 +733,33 @@ pub async fn stop_recording(state: State<'_, AppState>) -> AppResult<Track> {
     })
     .await
     .map_err(|e| AppError::Audio(format!("stop-recording task failed: {e}")))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::window_geometry;
+
+    /// Every floating size must be its own minimum, or macOS clamps the
+    /// shrink and the window stays at the size it already had.
+    #[test]
+    fn floating_player_sizes_are_their_own_minimum() {
+        for size in ["mini", "micro"] {
+            let (w, h, min_w, min_h, floating) = window_geometry(size);
+            assert!(floating, "{size} should float above other windows");
+            assert_eq!((w, h), (min_w, min_h), "{size} must be able to reach its size");
+        }
+    }
+
+    /// Micro is the smallest size, and unknown values fall back to the full
+    /// window rather than trapping the user in a locked, tiny window.
+    #[test]
+    fn micro_is_smallest_and_unknown_falls_back_to_full() {
+        let (_, micro_h, ..) = window_geometry("micro");
+        let (_, mini_h, ..) = window_geometry("mini");
+        assert!(micro_h < mini_h, "micro must be shorter than mini");
+
+        let full = window_geometry("full");
+        assert_eq!(window_geometry("nonsense"), full);
+        assert!(!full.4, "the full window stays resizable");
+    }
 }

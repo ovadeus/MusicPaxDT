@@ -235,17 +235,21 @@ export default function App() {
     refreshAiLabel();
   }, [settingsOpen, refreshAiLabel]);
   // Theater (in-app fullscreen) for the now-playing media.
-  const [mini, setMini] = useState(false);
+  // Window size ladder: full app → mini card → micro bar.
+  const [windowSize, setWindowSize] = useState<ipc.WindowSize>("full");
+  const mini = windowSize !== "full";
+  const micro = windowSize === "micro";
   const [miniVideo, setMiniVideo] = useState(false);
   const miniCoverRef = useRef<HTMLDivElement | null>(null);
   const [miniRect, setMiniRect] = useState<
     { top: number; left: number; width: number; height: number } | null
   >(null);
-  const toggleMini = useCallback((on: boolean) => {
-    setMini(on);
-    if (on) setTheater(false);
-    else setMiniVideo(false);
-    ipc.setMiniWindow(on).catch(() => {});
+  const resizeWindow = useCallback((size: ipc.WindowSize) => {
+    setWindowSize(size);
+    if (size !== "full") setTheater(false);
+    // Only the mini card has a cover slot the video can fill.
+    if (size !== "mini") setMiniVideo(false);
+    ipc.setWindowSize(size).catch(() => {});
   }, []);
   const [theater, setTheater] = useState(false);
   const [theaterRect, setTheaterRect] = useState<
@@ -1049,7 +1053,7 @@ export default function App() {
   // Mini player: measure the cover slot so the live video (when toggled on) can
   // fill it on top of the mini overlay.
   useEffect(() => {
-    if (!mini || !theaterVideo) {
+    if (!mini || micro || !theaterVideo) {
       setMiniRect(null);
       return;
     }
@@ -1067,7 +1071,7 @@ export default function App() {
       ro.disconnect();
       window.removeEventListener("resize", measure);
     };
-  }, [mini, theaterVideo]);
+  }, [mini, micro, theaterVideo]);
 
   // The rect the floating video players fill: the theater stage, or the mini
   // cover slot (lifted above the mini overlay), or nowhere.
@@ -1104,7 +1108,8 @@ export default function App() {
     },
     { id: "settings", label: "Open Settings", run: () => setSettingsOpen(true) },
     { id: "viz", label: "Open Visualizer", run: () => setVisualizerOpen(true) },
-    { id: "mini", label: "Open Mini Player", run: () => toggleMini(true) },
+    { id: "mini", label: "Open Mini Player", run: () => resizeWindow("mini") },
+    { id: "micro", label: "Open Micro Player", run: () => resizeWindow("micro") },
     { id: "yt", label: "Search YouTube", hint: "add music", run: () => setYtSearchOpen(true) },
     {
       id: "spotify",
@@ -1197,7 +1202,7 @@ export default function App() {
             <>
               <button
                 className="settings-button"
-                onClick={() => toggleMini(true)}
+                onClick={() => resizeWindow("mini")}
                 title="Mini player"
               >
                 <PictureInPicture2 size={16} />
@@ -1730,7 +1735,9 @@ export default function App() {
           onVolume={handleVolume}
           onPrev={() => playPrev(nowRef.current.id)}
           onNext={() => playNext(nowRef.current.id)}
-          onExit={() => toggleMini(false)}
+          micro={micro}
+          onGrow={() => resizeWindow(micro ? "mini" : "full")}
+          onShrink={micro ? undefined : () => resizeWindow("micro")}
           canStep={!lineIn && (stream != null || now != null)}
           coverRef={miniCoverRef}
         />

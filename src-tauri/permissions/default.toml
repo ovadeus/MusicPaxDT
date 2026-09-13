@@ -39,7 +39,7 @@ commands.allow = [
     "relink_track",
     "start_screen_audio",
     "stop_screen_audio",
-    "set_mini_window",
+    "set_window_size",
     "engine_status",
     "start_recording",
     "stop_recording",
