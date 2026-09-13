@@ -79,6 +79,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::import_folder,
+            commands::live_media_dir,
+            commands::set_live_media_dir,
+            commands::rescan_live_media,
+            commands::list_live_media,
             commands::list_tracks,
             commands::update_track_metadata,
             commands::set_track_favorite,

@@ -257,6 +257,11 @@ export default function App() {
   >(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const [onAir, setOnAir] = useState(false);
+  // Mirror for callbacks that must not re-bind on every broadcast state change.
+  const onAirRef = useRef(false);
+  useEffect(() => {
+    onAirRef.current = onAir;
+  }, [onAir]);
   const [editTrack, setEditTrack] = useState<Track | null>(null);
   const [enrichingId, setEnrichingId] = useState<number | null>(null);
   const [enrichProgress, setEnrichProgress] = useState<{
@@ -702,6 +707,11 @@ export default function App() {
             track.sourceKind === "radio" ||
             track.sourceKind === "stream")
         ) {
+          // Streams play here but never reach the broadcast tee. Say so the
+          // moment it happens, rather than letting the station go silent.
+          if (onAirRef.current) {
+            showStatus("Not on air — only Live Media (local files) broadcasts. Playing here only.");
+          }
           await ipc.stop().catch(() => {});
           setNow(null);
           setStream(track);
@@ -898,6 +908,11 @@ export default function App() {
         setSource(next);
         return;
       }
+      if (next === "live") {
+        // The on-air view. Playback is left alone — you may already be live.
+        openGoLive();
+        return;
+      }
       setStream(null);
       const stat = await ipc.startLineIn(next as LineInSource);
       setNow(null);
@@ -930,6 +945,68 @@ export default function App() {
       playCount: 0,
       addedAt: 0,
     });
+  };
+
+  // ----- Live Media: the Go Live on-air folder ------------------------------
+  // Only local files can broadcast, so the Live view is exactly the OWNED
+  // tracks under one chosen folder — never the aggregated library.
+  const [liveDir, setLiveDir] = useState<string | null>(null);
+  const [liveTracks, setLiveTracks] = useState<Track[]>([]);
+  const refreshLiveMedia = useCallback(async () => {
+    try {
+      const dir = await ipc.liveMediaDir();
+      setLiveDir(dir);
+      setLiveTracks(dir ? await ipc.listLiveMedia() : []);
+    } catch (e) {
+      showStatus(`${e}`);
+    }
+  }, [showStatus]);
+
+  // Opening Go Live switches the main view to Live Media and refreshes it, so
+  // files dropped into the folder since last time are already there.
+  const openGoLive = useCallback(() => {
+    setSource("live");
+    setGoLiveOpen(true);
+    ipc
+      .rescanLiveMedia()
+      .catch(() => {})
+      .then(() => refreshLiveMedia());
+  }, [refreshLiveMedia]);
+
+  const handleSelectLiveFolder = async () => {
+    const folder = await open({
+      directory: true,
+      multiple: false,
+      title: "Choose your Live Media folder",
+    });
+    if (typeof folder !== "string") return;
+    setBusy(true);
+    try {
+      const r = await ipc.setLiveMediaDir(folder);
+      showStatus(`Live Media: ${r.imported} added, ${r.skipped} already in the library`);
+      await refreshLiveMedia();
+      await refreshTracks();
+    } catch (e) {
+      showStatus(`Live Media scan failed: ${e}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRescanLive = async () => {
+    setBusy(true);
+    try {
+      const r = await ipc.rescanLiveMedia();
+      showStatus(
+        r.imported ? `Live Media: ${r.imported} new ${r.imported === 1 ? "file" : "files"}` : "Live Media is up to date",
+      );
+      await refreshLiveMedia();
+      if (r.imported) await refreshTracks();
+    } catch (e) {
+      showStatus(`Live Media scan failed: ${e}`);
+    } finally {
+      setBusy(false);
+    }
   };
 
   const handleImport = async () => {
@@ -997,7 +1074,7 @@ export default function App() {
   };
 
   const lineIn =
-    source !== "library" && source !== "radio" && source !== "stream"
+    source !== "library" && source !== "radio" && source !== "stream" && source !== "live"
       ? (source as LineInSource)
       : null;
 
@@ -1131,7 +1208,7 @@ export default function App() {
       hint: "re-resolve dead YouTube streams",
       run: () => handleRepair(),
     },
-    { id: "golive", label: "Go Live", hint: "broadcast", run: () => setGoLiveOpen(true) },
+    { id: "golive", label: "Go Live", hint: "broadcast", run: openGoLive },
     ...(aiLabel
       ? [{ id: "ai", label: "AI Assistant", run: () => setAiAssistantOpen(true) }]
       : []),
@@ -1194,7 +1271,7 @@ export default function App() {
                 onRepair={handleRepair}
                 aiAvailable={!!aiLabel}
                 onAiAssistant={() => setAiAssistantOpen(true)}
-                onGoLive={() => setGoLiveOpen(true)}
+                onGoLive={openGoLive}
               />
             </>
           )}
@@ -1236,7 +1313,15 @@ export default function App() {
       {/* Slides in directly under the header — an inline bar, not an overlay,
           so editing connection details can't be dismissed by a stray click. */}
       {goLiveOpen && (
-        <GoLivePanel onClose={() => setGoLiveOpen(false)} onError={showStatus} />
+        <GoLivePanel
+          onClose={() => setGoLiveOpen(false)}
+          onError={showStatus}
+          liveDir={liveDir}
+          liveCount={liveTracks.length}
+          busyMedia={busy}
+          onSelectFolder={handleSelectLiveFolder}
+          onRescan={handleRescanLive}
+        />
       )}
 
       {status && <div className="status-banner">{status}</div>}
@@ -1338,6 +1423,46 @@ export default function App() {
               listenOrder={listenOrder}
               onListenOrderChange={changeListenOrder}
               onReshuffle={reshuffle}
+            />
+          </div>
+        </div>
+      ) : source === "live" ? (
+        <div className="library-layout stream-layout">
+          <div className="stream-col">
+            <LibraryTable
+              tracks={liveTracks}
+              heading="Live Media"
+              fadeKey="live"
+              searchable={false}
+              emptyMessage={
+                liveDir
+                  ? "No audio files in the Live Media folder yet — add some, then press Rescan in Go Live."
+                  : "Choose your Live Media folder in Go Live above. Only local files can go on air."
+              }
+              query=""
+              onQueryChange={() => {}}
+              sort={sort}
+              onSortChange={setSort}
+              onActivate={(t) => void playTrack(t, liveTracks)}
+              onEdit={setEditTrack}
+              onEnrich={handleEnrichTrack}
+              onToggleFavorite={toggleFavorite}
+              visibleColumns={columnPrefs}
+              curator={curator}
+              enrichingId={enrichingId}
+              nowPlayingId={
+                stream ? stream.id : playState === "stopped" ? null : (now?.track.id ?? null)
+              }
+              playlists={playlists}
+              onAddToPlaylist={(playlistId, trackId) => {
+                ipc
+                  .addToPlaylist(playlistId, trackId)
+                  .then(() => {
+                    refreshPlaylists();
+                    showStatus("Added to playlist");
+                  })
+                  .catch((e) => showStatus(`${e}`));
+              }}
             />
           </div>
         </div>

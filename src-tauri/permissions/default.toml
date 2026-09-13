@@ -8,6 +8,10 @@ identifier = "allow-app-commands"
 description = "Allow the STACK frontend to call all application commands."
 commands.allow = [
     "import_folder",
+    "live_media_dir",
+    "set_live_media_dir",
+    "rescan_live_media",
+    "list_live_media",
     "list_tracks",
     "update_track_metadata",
     "set_track_favorite",

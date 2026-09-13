@@ -73,6 +73,14 @@ thiserror.
       source password in keychain (radioking_source_password). Recommended setup:
       RØDECaster mixes mic+music in hardware → its program is the aux/line-in source.
       TODO: Shoutcast handshake, AAC/Ogg, Radio King stats API (listeners/metadata).
+      Live Media (2026-09-13): the on-air list is one user-chosen local folder
+      (setting live.media_dir; commands live_media_dir/set_live_media_dir/
+      rescan_live_media/list_live_media). A "Live" source shows exactly the OWNED
+      tracks under it (db::list_tracks_under, exact prefix — not LIKE). Files join
+      the main library as normal OWNED tracks; the Live view is a filtered query.
+      Deliberately a hard line, not per-track airability: streaming sources' terms
+      forbid re-broadcasting, so aggregated playlists are never in the live view.
+      Go Live is an inline accordion under the header (not a modal).
 - M5b AI playlist builder ✅ done (2026-09-10) — third top-bar quick-add button
       (YouTube / Spotify / AI) opens BuildPlaylistWithAIModal ("Build Playlist
       With a Text Prompt", track count 1–50, default 25). ai_build_playlist

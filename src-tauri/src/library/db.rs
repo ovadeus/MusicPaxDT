@@ -352,6 +352,25 @@ pub fn list_tracks(
     Ok(tracks)
 }
 
+/// OWNED tracks whose file lives under `dir` (recursively) — the Live Media
+/// list. Only files on this machine can go on air, so this is exactly the set
+/// Go Live may play. Prefix-matched with substr rather than LIKE so a folder
+/// named e.g. `My_Music` or `100%` can't act as a wildcard.
+pub fn list_tracks_under(conn: &Connection, dir: &str) -> AppResult<Vec<Track>> {
+    let prefix = format!("{}/", dir.trim_end_matches('/'));
+    let mut stmt = conn.prepare(
+        "SELECT * FROM tracks
+         WHERE capability = 'OWNED' AND substr(uri, 1, length(?1)) = ?1
+         ORDER BY artist COLLATE NOCASE, album COLLATE NOCASE, title COLLATE NOCASE",
+    )?;
+    let rows = stmt.query_map(params![prefix], track_from_row)?;
+    let mut tracks = Vec::new();
+    for row in rows {
+        tracks.push(row?);
+    }
+    Ok(tracks)
+}
+
 /// Run migrations on an arbitrary connection (used by tests in other modules).
 #[cfg(test)]
 pub fn open_in_memory_for_tests(conn: &Connection) {
@@ -754,6 +773,35 @@ mod tests {
             source_kind: "local".into(),
             capability: Capability::Owned,
         }
+    }
+
+    /// The Live Media list is exactly the OWNED files under the chosen folder:
+    /// a sibling folder sharing the prefix (`Music2` vs `Music`) must not leak
+    /// in, LIKE wildcards in the folder name must not widen the match, and a
+    /// stream living "under" the path can never appear — streams can't air.
+    #[test]
+    fn list_tracks_under_is_an_exact_folder_prefix_of_owned_files() {
+        let conn = mem_db();
+        let dir = "/Users/me/My_Music 100%";
+        insert_track(&conn, &new_track("In", "A", &format!("{dir}/a.mp3")), 0).unwrap();
+        insert_track(&conn, &new_track("Deep", "A", &format!("{dir}/sub/b.mp3")), 0).unwrap();
+        // Sibling folder that merely starts with the same text.
+        insert_track(&conn, &new_track("Sibling", "A", &format!("{dir}2/c.mp3")), 0).unwrap();
+        // `_` and `%` would match anything under LIKE; they must be literal here.
+        insert_track(&conn, &new_track("Wild", "A", "/Users/me/MyXMusic 100Y/d.mp3"), 0).unwrap();
+        let mut stream = new_track("Stream", "A", &format!("{dir}/e"));
+        stream.capability = Capability::StreamPlayable;
+        insert_track(&conn, &stream, 0).unwrap();
+
+        let got: Vec<String> = list_tracks_under(&conn, dir)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.title.unwrap())
+            .collect();
+        assert_eq!(got, vec!["Deep", "In"], "sorted by title; nothing else leaks in");
+
+        // A trailing slash on the chosen folder is normalised away.
+        assert_eq!(list_tracks_under(&conn, &format!("{dir}/")).unwrap().len(), 2);
     }
 
     #[test]

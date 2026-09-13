@@ -84,6 +84,68 @@ pub async fn list_tracks(
     .map_err(|e| AppError::Other(format!("query task failed: {e}")))?
 }
 
+/// Settings key for the Live Media folder.
+const LIVE_MEDIA_DIR_KEY: &str = "live.media_dir";
+
+/// The Live Media folder, if one has been chosen. Go Live airs only local
+/// files, and this folder is the on-air list: aggregated sources (YouTube,
+/// radio) can't be re-broadcast under their terms, so the live view is
+/// deliberately just what's under here.
+#[tauri::command]
+pub fn live_media_dir(state: State<'_, AppState>) -> AppResult<Option<String>> {
+    let conn = lock_unpoisoned(&state.db);
+    db::get_setting(&conn, LIVE_MEDIA_DIR_KEY)
+}
+
+/// Choose the Live Media folder and scan it. The files join the main library
+/// as ordinary OWNED tracks (they are the user's own files); the Live Media
+/// list is a filtered view of them, not a second copy.
+#[tauri::command]
+pub async fn set_live_media_dir(
+    path: String,
+    state: State<'_, AppState>,
+) -> AppResult<ImportResult> {
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = lock_unpoisoned(&db);
+        db::set_setting(&conn, LIVE_MEDIA_DIR_KEY, path.trim())?;
+        scan::import_folder(&conn, &PathBuf::from(path.trim()))
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("live media scan failed: {e}")))?
+}
+
+/// Re-scan the Live Media folder so files added since still show up. Dedupes
+/// by uri, so this is safe to run every time Go Live opens.
+#[tauri::command]
+pub async fn rescan_live_media(state: State<'_, AppState>) -> AppResult<ImportResult> {
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = lock_unpoisoned(&db);
+        match db::get_setting(&conn, LIVE_MEDIA_DIR_KEY)? {
+            Some(dir) if !dir.trim().is_empty() => scan::import_folder(&conn, &PathBuf::from(dir)),
+            _ => Ok(ImportResult { imported: 0, skipped: 0, errors: Vec::new() }),
+        }
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("live media scan failed: {e}")))?
+}
+
+/// The Live Media list: every OWNED track under the chosen folder.
+#[tauri::command]
+pub async fn list_live_media(state: State<'_, AppState>) -> AppResult<Vec<Track>> {
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = lock_unpoisoned(&db);
+        match db::get_setting(&conn, LIVE_MEDIA_DIR_KEY)? {
+            Some(dir) if !dir.trim().is_empty() => db::list_tracks_under(&conn, &dir),
+            _ => Ok(Vec::new()),
+        }
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("live media query failed: {e}")))?
+}
+
 fn artist_bio_key(artist: &str) -> String {
     format!("artistbio.{}", artist.trim().to_lowercase())
 }

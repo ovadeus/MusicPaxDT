@@ -32,6 +32,28 @@ export function importFolder(path: string): Promise<ImportResult> {
   return invoke<ImportResult>("import_folder", { path });
 }
 
+// ----- Live Media: the Go Live on-air folder ---------------------------------
+// Only local files can broadcast (aggregated sources can't be re-streamed under
+// their terms), so the live view is exactly the OWNED tracks under this folder.
+
+export function liveMediaDir(): Promise<string | null> {
+  return invoke<string | null>("live_media_dir");
+}
+
+/// Choose the folder and scan it (files join the library as OWNED tracks).
+export function setLiveMediaDir(path: string): Promise<ImportResult> {
+  return invoke<ImportResult>("set_live_media_dir", { path });
+}
+
+/// Re-scan the chosen folder so newly added files appear. Dedupes by uri.
+export function rescanLiveMedia(): Promise<ImportResult> {
+  return invoke<ImportResult>("rescan_live_media");
+}
+
+export function listLiveMedia(): Promise<Track[]> {
+  return invoke<Track[]>("list_live_media");
+}
+
 export function listTracks(opts: {
   query?: string;
   sort?: SortSpec;

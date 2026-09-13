@@ -5083,3 +5083,90 @@ input[type="range"] {
   border-radius: 7px;
   cursor: pointer;
 }
+
+/* ---------- Go Live: Live Media folder row ---------- */
+.golive-media {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
+.golive-media-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-dim);
+  min-width: 0;
+}
+
+.golive-media-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+/* The path takes whatever room is left and ellipsizes from the left, so the
+   folder *name* (the end) stays readable however deep it lives. */
+.golive-media-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+.golive-media-path.empty {
+  font-family: inherit;
+  font-style: italic;
+  color: var(--text-dim);
+  direction: ltr;
+}
+
+.golive-media-count {
+  font-size: 12px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.golive-media-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 7px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.golive-media-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.golive-media-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.golive-media-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  max-width: 100ch;
+}

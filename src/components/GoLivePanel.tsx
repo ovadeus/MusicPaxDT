@@ -1,11 +1,18 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronUp, RadioTower } from "lucide-react";
+import { ChevronDown, ChevronUp, FolderOpen, RadioTower, RefreshCw } from "lucide-react";
 import * as ipc from "../lib/ipc";
 import type { BroadcastConfig, BroadcastStatus } from "../lib/ipc";
 
 interface Props {
   onClose: () => void;
   onError: (message: string) => void;
+  /// The Live Media folder — the only tracks that can go on air. Null until chosen.
+  liveDir: string | null;
+  liveCount: number;
+  /// True while a folder scan is running (disables the folder buttons).
+  busyMedia?: boolean;
+  onSelectFolder: () => void;
+  onRescan: () => void;
 }
 
 const BITRATES = [128, 192, 256, 320];
@@ -34,7 +41,15 @@ function formatElapsed(ms: number): string {
 /// you edit *while* on air, and a click-outside-to-dismiss overlay threw the
 /// settings away mid-broadcast. Nothing here closes except the collapse
 /// button, and collapsing never stops the stream.
-export default function GoLivePanel({ onClose, onError }: Props) {
+export default function GoLivePanel({
+  onClose,
+  onError,
+  liveDir,
+  liveCount,
+  busyMedia,
+  onSelectFolder,
+  onRescan,
+}: Props) {
   const [config, setConfig] = useState<BroadcastConfig | null>(null);
   const [password, setPassword] = useState("");
   const [hasPassword, setHasPassword] = useState(false);
@@ -220,6 +235,45 @@ export default function GoLivePanel({ onClose, onError }: Props) {
             </div>
           </div>
 
+          {/* The on-air folder. Deliberately a hard line, not a per-track
+              judgement: what's under this folder can air, nothing else can. */}
+          <div className="golive-media">
+            <div className="golive-media-row">
+              <FolderOpen size={15} />
+              <span className="golive-media-label">Live Media folder</span>
+              {liveDir ? (
+                <span className="golive-media-path" title={liveDir}>
+                  {liveDir}
+                </span>
+              ) : (
+                <span className="golive-media-path empty">No folder selected</span>
+              )}
+              {liveDir && (
+                <span className="golive-media-count">
+                  {liveCount} {liveCount === 1 ? "track" : "tracks"}
+                </span>
+              )}
+              <button className="golive-media-btn" onClick={onSelectFolder} disabled={busyMedia}>
+                {liveDir ? "Change folder…" : "Select folder…"}
+              </button>
+              {liveDir && (
+                <button
+                  className="golive-media-btn"
+                  onClick={onRescan}
+                  disabled={busyMedia}
+                  title="Pick up files added since the last scan"
+                >
+                  <RefreshCw size={13} /> Rescan
+                </button>
+              )}
+            </div>
+            <p className="golive-media-note">
+              <strong>Live Media</strong> airs only files on this computer — tracks you own
+              or are licensed to broadcast. Playlists built from YouTube and other streaming
+              sources can't go on air: their terms don't allow re-broadcasting.
+            </p>
+          </div>
+
           <button
             className="golive-advanced-toggle"
             onClick={() => setAdvanced((v) => !v)}
@@ -271,10 +325,9 @@ export default function GoLivePanel({ onClose, onError }: Props) {
           <p className="golive-hint">
             Find your host, port, mount and source password in your Radio King{" "}
             <strong>Live</strong> tab. MUSICPAX airs your <strong>output mix</strong> —
-            library playback + line-in/aux — encoded to MP3. YouTube/internet-radio is
-            never re-streamed. <strong>RØDECaster tip:</strong> set the RØDECaster's
-            program output as your aux/line-in source so its hardware mix (mic + music)
-            is what goes out.
+            Live Media playback + line-in/aux — encoded to MP3.{" "}
+            <strong>RØDECaster tip:</strong> set the RØDECaster's program output as your
+            aux/line-in source so its hardware mix (mic + music) is what goes out.
           </p>
         </div>
       )}
