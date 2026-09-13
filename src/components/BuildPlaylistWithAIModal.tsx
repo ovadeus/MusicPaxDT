@@ -5,7 +5,7 @@ import type { MirrorProgress } from "../lib/types";
 
 const DEFAULT_COUNT = 25;
 /// Mirrors `ai::PLAYLIST_MAX_TRACKS` in the Rust core, which clamps too.
-const MAX_COUNT = 100;
+const MAX_COUNT = 50;
 
 /// Friendly names for the `enrich.ai_provider` setting values.
 const PROVIDER_NAMES: Record<string, string> = {

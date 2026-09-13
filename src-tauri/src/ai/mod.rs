@@ -62,7 +62,11 @@ pub struct PlaylistDraft {
 }
 
 /// Hard ceiling on tracks per AI-built playlist (also enforced in the UI).
-pub const PLAYLIST_MAX_TRACKS: usize = 100;
+/// Held at 50 for quality, not capability: asked for "exactly N" real songs
+/// under the curator rules, a model runs out of confident picks and starts
+/// padding the tail, and every drafted track then costs one YouTube search.
+/// Only AI auto-build is capped — manual playlists and imports are unbounded.
+pub const PLAYLIST_MAX_TRACKS: usize = 50;
 
 /// Structured result of a cleanup call.
 #[derive(Debug, Clone, Default, Deserialize)]

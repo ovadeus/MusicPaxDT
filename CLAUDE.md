@@ -75,7 +75,7 @@ thiserror.
       TODO: Shoutcast handshake, AAC/Ogg, Radio King stats API (listeners/metadata).
 - M5b AI playlist builder ✅ done (2026-09-10) — third top-bar quick-add button
       (YouTube / Spotify / AI) opens BuildPlaylistWithAIModal ("Build Playlist
-      With a Text Prompt", track count 1–100, default 25). ai_build_playlist
+      With a Text Prompt", track count 1–50, default 25). ai_build_playlist
       (commands/streams.rs) has the configured LlmProvider draft {name, tracks}
       via ai::suggest_playlist, then runs the shared mirror_listed_tracks loop —
       the same youtube::channel_authority ranking (Topic / official artist /
