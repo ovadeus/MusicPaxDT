@@ -637,6 +637,13 @@ export function setYoutubeApiKey(key: string): Promise<void> {
   return invoke<void>("set_youtube_api_key", { key });
 }
 
+/// Check a YouTube Data API key (1 quota unit) before saving it. Resolves with
+/// a short success note; rejects with a plain-language reason naming the step
+/// to go back to.
+export function verifyYoutubeApiKey(key: string): Promise<string> {
+  return invoke<string>("verify_youtube_api_key", { key });
+}
+
 export function setSpotifyCredentials(
   clientId: string,
   clientSecret: string,

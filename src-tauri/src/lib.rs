@@ -120,6 +120,7 @@ pub fn run() {
             commands::recording_format_label,
             commands::streams::integration_status,
             commands::streams::set_youtube_api_key,
+            commands::streams::verify_youtube_api_key,
             commands::streams::set_spotify_credentials,
             commands::streams::import_stream_url,
             commands::streams::import_direct_stream,

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { X } from "lucide-react";
+import YouTubeKeySetup from "./YouTubeKeySetup";
 import * as ipc from "../lib/ipc";
 import { COLUMN_TOGGLES, type ColumnPrefs } from "../lib/columnPrefs";
 import type { EnrichIntegrationStatus, IntegrationStatus } from "../lib/types";
@@ -62,7 +63,7 @@ export default function SettingsPanel({
   const [loaded, setLoaded] = useState(false);
   const [integrations, setIntegrations] = useState<IntegrationStatus | null>(null);
   const [enrich, setEnrich] = useState<EnrichIntegrationStatus | null>(null);
-  const [ytKey, setYtKey] = useState("");
+  const [ytSetupOpen, setYtSetupOpen] = useState(false);
   const [spotifyId, setSpotifyId] = useState("");
   const [spotifySecret, setSpotifySecret] = useState("");
   const [acoustidKey, setAcoustidKey] = useState("");
@@ -144,10 +145,8 @@ export default function SettingsPanel({
     }
   };
 
-  const saveYoutubeKey = async () => {
+  const refreshIntegrations = async () => {
     try {
-      await ipc.setYoutubeApiKey(ytKey);
-      setYtKey("");
       setIntegrations(await ipc.integrationStatus());
     } catch (e) {
       onError(`${e}`);
@@ -299,14 +298,8 @@ export default function SettingsPanel({
                   </em>
                 </span>
                 <div className="integration-inputs">
-                  <input
-                    type="password"
-                    placeholder="Paste API key"
-                    value={ytKey}
-                    onChange={(e) => setYtKey(e.target.value)}
-                  />
-                  <button onClick={saveYoutubeKey} disabled={!ytKey.trim()}>
-                    Save
+                  <button onClick={() => setYtSetupOpen(true)}>
+                    {integrations?.youtubeApiKey ? "Replace" : "Set up — it's free"}
                   </button>
                 </div>
               </div>
@@ -551,6 +544,13 @@ export default function SettingsPanel({
           </>
         )}
       </div>
+
+      {ytSetupOpen && (
+        <YouTubeKeySetup
+          onClose={() => setYtSetupOpen(false)}
+          onSaved={refreshIntegrations}
+        />
+      )}
     </div>
   );
 }

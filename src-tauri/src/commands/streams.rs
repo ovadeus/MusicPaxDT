@@ -50,6 +50,63 @@ pub fn set_youtube_api_key(key: String) -> AppResult<()> {
     keyring_set("youtube_api_key", key.trim()).map_err(AppError::Other)
 }
 
+/// Check a YouTube Data API key and report back in plain language. Uses a
+/// 1-unit `videos.list` call rather than a 100-unit `search.list`: verifying a
+/// key must not cost a noticeable slice of the 10,000-unit daily quota.
+///
+/// The failure worth naming precisely is `accessNotConfigured` — a key created
+/// before the API was switched on for its project. It looks like a bad key but
+/// isn't, and guessing sends people back to re-create a key that was fine.
+#[tauri::command]
+pub async fn verify_youtube_api_key(key: String) -> AppResult<String> {
+    let key = key.trim();
+    if key.is_empty() {
+        return Err(AppError::Other("Paste a key first.".into()));
+    }
+    let resp = http()
+        .get("https://www.googleapis.com/youtube/v3/videos")
+        // Any always-public video works; we only need the call to be accepted.
+        .query(&[("part", "id"), ("id", "dQw4w9WgXcQ"), ("key", key)])
+        .send()
+        .await
+        .map_err(|e| AppError::Other(format!("Couldn't reach YouTube: {e}")))?;
+
+    let status = resp.status();
+    if status.is_success() {
+        return Ok("Key works — saved.".into());
+    }
+    let body = resp.text().await.unwrap_or_default();
+    let reason = serde_json::from_str::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|v| v["error"]["errors"][0]["reason"].as_str().map(str::to_string))
+        .unwrap_or_default();
+    Err(AppError::Other(key_error_message(&reason, status.as_u16())))
+}
+
+/// Turn Google's `reason` code into something that names the step to redo.
+/// Every one of these is a state a person can actually get into while
+/// following the setup panel, so each says which step fixes it.
+fn key_error_message(reason: &str, status: u16) -> String {
+    match reason {
+        "accessNotConfigured" | "SERVICE_DISABLED" => {
+            "The YouTube Data API isn't switched on for this key's project yet. \
+             Go back to step 1, press Enable, then try again."
+                .into()
+        }
+        "keyInvalid" | "badRequest" => "That key isn't valid — copy it again from step 2.".into(),
+        "ipRefererBlocked" | "forbidden" => {
+            "This key has restrictions that block the app. In Google Cloud, edit \
+             the key and either remove its restrictions or allow the YouTube Data API."
+                .into()
+        }
+        // The key itself is good; only today's allowance is spent.
+        "quotaExceeded" | "dailyLimitExceeded" => {
+            "This key's daily quota is already used up. It will work again tomorrow.".into()
+        }
+        _ => format!("YouTube rejected the key (HTTP {status})."),
+    }
+}
+
 /// One page of the MusicPax public feed (musicpax.com). Read-only metadata for
 /// the in-app "MusicPax Feed" view; infinite scroll drives `page`.
 #[tauri::command]
@@ -1091,6 +1148,28 @@ pub async fn rename_playlist(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A key made before the API was enabled is the most common setup failure
+    /// and looks exactly like a bad key. Sending someone off to re-create a
+    /// perfectly good key is the one wrong turn worth guarding against.
+    #[test]
+    fn disabled_api_is_not_reported_as_a_bad_key() {
+        for reason in ["accessNotConfigured", "SERVICE_DISABLED"] {
+            let msg = key_error_message(reason, 403);
+            assert!(msg.contains("step 1"), "{reason} should point at step 1: {msg}");
+            assert!(!msg.contains("isn't valid"), "{reason} must not read as a bad key");
+        }
+        assert!(key_error_message("keyInvalid", 400).contains("step 2"));
+    }
+
+    /// A spent quota means the key itself is fine — say so, or people will
+    /// delete a working key and start over.
+    #[test]
+    fn spent_quota_reads_as_temporary_and_unknown_reasons_still_say_something() {
+        let msg = key_error_message("quotaExceeded", 403);
+        assert!(msg.contains("tomorrow"), "{msg}");
+        assert!(key_error_message("somethingNew", 500).contains("500"));
+    }
 
     #[test]
     fn derives_title_from_archive_org_url() {

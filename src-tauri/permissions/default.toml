@@ -48,6 +48,7 @@ commands.allow = [
     "recording_format_label",
     "integration_status",
     "set_youtube_api_key",
+    "verify_youtube_api_key",
     "set_spotify_credentials",
     "import_stream_url",
     "import_direct_stream",
