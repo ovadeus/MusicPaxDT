@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, RadioTower, X } from "lucide-react";
+import { ChevronDown, ChevronUp, RadioTower } from "lucide-react";
 import * as ipc from "../lib/ipc";
 import type { BroadcastConfig, BroadcastStatus } from "../lib/ipc";
 
@@ -29,6 +29,11 @@ function formatElapsed(ms: number): string {
 
 /// "Go Live" — broadcast the MUSICPAX output mix to a Radio King / Icecast
 /// station. Connection details come from the user's Radio King → Live tab.
+///
+/// An inline accordion under the header rather than a modal: this is a form
+/// you edit *while* on air, and a click-outside-to-dismiss overlay threw the
+/// settings away mid-broadcast. Nothing here closes except the collapse
+/// button, and collapsing never stops the stream.
 export default function GoLivePanel({ onClose, onError }: Props) {
   const [config, setConfig] = useState<BroadcastConfig | null>(null);
   const [password, setPassword] = useState("");
@@ -117,18 +122,12 @@ export default function GoLivePanel({ onClose, onError }: Props) {
   };
 
   return (
-    <div className="settings-overlay" onClick={busy ? undefined : onClose}>
-      <div className="settings-panel golive-panel" onClick={(e) => e.stopPropagation()}>
-        <div className="settings-header">
-          <h2>
-            <RadioTower size={18} /> Go Live
-          </h2>
-          <button className="settings-close" onClick={onClose} title="Close">
-            <X size={15} />
-          </button>
-        </div>
-
-        <div className={`golive-status golive-${status.state}`}>
+    <section className={`golive-bar golive-${status.state}`}>
+      <div className="golive-bar-head">
+        <h2>
+          <RadioTower size={16} /> Go Live
+        </h2>
+        <div className="golive-status">
           <span className="golive-dot" />
           <span className="golive-state">{STATE_LABEL[status.state]}</span>
           {status.state === "live" && (
@@ -138,128 +137,76 @@ export default function GoLivePanel({ onClose, onError }: Props) {
             <span className="golive-msg">{status.message}</span>
           )}
         </div>
+        <button className="golive-collapse" onClick={onClose} title="Collapse">
+          <ChevronUp size={16} />
+        </button>
+      </div>
 
-        {config && (
-          <div className="golive-form">
-            <div className="golive-row">
-              <label className="golive-field golive-grow">
-                <span>Server host</span>
-                <input
-                  value={config.host}
-                  placeholder="e.g. live.radioking.com"
-                  disabled={live}
-                  onChange={(e) => set("host", e.target.value)}
-                />
-              </label>
-              <label className="golive-field golive-port">
-                <span>Port</span>
-                <input
-                  type="number"
-                  value={config.port}
-                  disabled={live}
-                  onChange={(e) => set("port", Number(e.target.value) || 0)}
-                />
-              </label>
-            </div>
-
-            <div className="golive-row">
-              <label className="golive-field golive-grow">
-                <span>Mount point</span>
-                <input
-                  value={config.mount}
-                  placeholder="/your-radio"
-                  disabled={live}
-                  onChange={(e) => set("mount", e.target.value)}
-                />
-              </label>
-              <label className="golive-field golive-port">
-                <span>Bitrate</span>
-                <select
-                  value={config.bitrate}
-                  disabled={live}
-                  onChange={(e) => set("bitrate", Number(e.target.value))}
-                >
-                  {BITRATES.map((b) => (
-                    <option key={b} value={b}>
-                      {b} kbps
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-
-            <div className="golive-row">
-              <label className="golive-field golive-port">
-                <span>Username</span>
-                <input
-                  value={config.username}
-                  placeholder="source"
-                  disabled={live}
-                  onChange={(e) => set("username", e.target.value)}
-                />
-              </label>
-              <label className="golive-field golive-grow">
-                <span>Source password</span>
-                <input
-                  type="password"
-                  value={password}
-                  placeholder={hasPassword ? "•••••••• (saved)" : "from Radio King → Live"}
-                  disabled={live}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-              </label>
-            </div>
-
-            <button
-              className="golive-advanced-toggle"
-              onClick={() => setAdvanced((v) => !v)}
-            >
-              <ChevronDown
-                size={14}
-                style={{ transform: advanced ? "rotate(180deg)" : "none" }}
+      {config && (
+        <div className="golive-form">
+          <div className="golive-grid">
+            <label className="golive-field golive-host">
+              <span>Server host</span>
+              <input
+                value={config.host}
+                placeholder="e.g. live.radioking.com"
+                disabled={live}
+                onChange={(e) => set("host", e.target.value)}
               />
-              Station details (optional)
-            </button>
-            {advanced && (
-              <>
-                <label className="golive-field">
-                  <span>Station name</span>
-                  <input
-                    value={config.name}
-                    disabled={live}
-                    onChange={(e) => set("name", e.target.value)}
-                  />
-                </label>
-                <div className="golive-row">
-                  <label className="golive-field golive-grow">
-                    <span>Genre</span>
-                    <input
-                      value={config.genre}
-                      disabled={live}
-                      onChange={(e) => set("genre", e.target.value)}
-                    />
-                  </label>
-                  <label className="golive-field golive-grow">
-                    <span>Website</span>
-                    <input
-                      value={config.url}
-                      disabled={live}
-                      onChange={(e) => set("url", e.target.value)}
-                    />
-                  </label>
-                </div>
-                <label className="golive-check">
-                  <input
-                    type="checkbox"
-                    checked={config.public}
-                    disabled={live}
-                    onChange={(e) => set("public", e.target.checked)}
-                  />
-                  List this stream in public Icecast directories
-                </label>
-              </>
-            )}
+            </label>
+            <label className="golive-field golive-port">
+              <span>Port</span>
+              <input
+                type="number"
+                value={config.port}
+                disabled={live}
+                onChange={(e) => set("port", Number(e.target.value) || 0)}
+              />
+            </label>
+            <label className="golive-field golive-mount">
+              <span>Mount point</span>
+              <input
+                value={config.mount}
+                placeholder="/your-radio"
+                disabled={live}
+                onChange={(e) => set("mount", e.target.value)}
+              />
+            </label>
+            <label className="golive-field golive-bitrate">
+              <span>Bitrate</span>
+              <select
+                value={config.bitrate}
+                disabled={live}
+                onChange={(e) => set("bitrate", Number(e.target.value))}
+              >
+                {BITRATES.map((b) => (
+                  <option key={b} value={b}>
+                    {b} kbps
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="golive-field golive-user">
+              <span>Username</span>
+              <input
+                value={config.username}
+                placeholder="source"
+                disabled={live}
+                onChange={(e) => set("username", e.target.value)}
+              />
+            </label>
+            <label className="golive-field golive-pass">
+              <span>Source password</span>
+              <input
+                type="password"
+                value={password}
+                placeholder={hasPassword ? "•••••••• (saved)" : "from Radio King → Live"}
+                disabled={live}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </label>
 
+            {/* Sits in the same row as the inputs, aligned to their baseline. */}
             <div className="golive-actions">
               {live ? (
                 <button className="golive-btn stop" onClick={stop} disabled={busy}>
@@ -272,17 +219,65 @@ export default function GoLivePanel({ onClose, onError }: Props) {
               )}
             </div>
           </div>
-        )}
 
-        <p className="settings-hint">
-          Find your host, port, mount and source password in your Radio King{" "}
-          <strong>Live</strong> tab. MUSICPAX airs your <strong>output mix</strong> —
-          library playback + line-in/aux — encoded to MP3. YouTube/internet-radio is
-          never re-streamed. <br />
-          <strong>RØDECaster tip:</strong> set the RØDECaster's program output as your
-          aux/line-in source so its hardware mix (mic + music) is what goes out.
-        </p>
-      </div>
-    </div>
+          <button
+            className="golive-advanced-toggle"
+            onClick={() => setAdvanced((v) => !v)}
+          >
+            <ChevronDown
+              size={14}
+              style={{ transform: advanced ? "rotate(180deg)" : "none" }}
+            />
+            Station details (optional)
+          </button>
+          {advanced && (
+            <div className="golive-grid golive-advanced">
+              <label className="golive-field golive-host">
+                <span>Station name</span>
+                <input
+                  value={config.name}
+                  disabled={live}
+                  onChange={(e) => set("name", e.target.value)}
+                />
+              </label>
+              <label className="golive-field golive-mount">
+                <span>Genre</span>
+                <input
+                  value={config.genre}
+                  disabled={live}
+                  onChange={(e) => set("genre", e.target.value)}
+                />
+              </label>
+              <label className="golive-field golive-mount">
+                <span>Website</span>
+                <input
+                  value={config.url}
+                  disabled={live}
+                  onChange={(e) => set("url", e.target.value)}
+                />
+              </label>
+              <label className="golive-check">
+                <input
+                  type="checkbox"
+                  checked={config.public}
+                  disabled={live}
+                  onChange={(e) => set("public", e.target.checked)}
+                />
+                List this stream in public Icecast directories
+              </label>
+            </div>
+          )}
+
+          <p className="golive-hint">
+            Find your host, port, mount and source password in your Radio King{" "}
+            <strong>Live</strong> tab. MUSICPAX airs your <strong>output mix</strong> —
+            library playback + line-in/aux — encoded to MP3. YouTube/internet-radio is
+            never re-streamed. <strong>RØDECaster tip:</strong> set the RØDECaster's
+            program output as your aux/line-in source so its hardware mix (mic + music)
+            is what goes out.
+          </p>
+        </div>
+      )}
+    </section>
   );
 }

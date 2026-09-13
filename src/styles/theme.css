@@ -2114,20 +2114,87 @@ body.col-resizing {
 }
 
 /* Go Live panel */
-.golive-panel {
-  width: min(560px, 94vw);
+/* Inline accordion under the app header — deliberately not an overlay, so a
+   stray click can't discard connection details mid-broadcast. */
+.golive-bar {
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+  padding: 12px 18px 14px;
+  animation: golive-slide 200ms ease-out;
+  /* The left edge carries the on-air state, readable from across the room. */
+  border-left: 3px solid transparent;
+}
+
+@keyframes golive-slide {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .golive-bar {
+    animation: none;
+  }
+}
+
+.golive-bar.golive-live {
+  border-left-color: #e0265a;
+  background: linear-gradient(to right, rgba(224, 38, 90, 0.07), transparent 320px),
+    var(--bg-raised);
+}
+
+.golive-bar.golive-error,
+.golive-bar.golive-reconnecting {
+  border-left-color: #e8a33d;
+}
+
+.golive-bar-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.golive-bar-head h2 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  font-size: 15px;
+  white-space: nowrap;
+}
+
+.golive-collapse {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  display: inline-flex;
+  padding: 4px;
+  border-radius: 6px;
+}
+
+.golive-collapse:hover {
+  color: var(--text);
+  background: var(--bg-hover);
 }
 
 .golive-status {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin: 12px 0 16px;
-  padding: 10px 14px;
-  border-radius: 10px;
+  gap: 8px;
+  min-width: 0;
+  padding: 5px 12px;
+  border-radius: 999px;
   background: var(--bg);
   border: 1px solid var(--border);
-  font-size: 13.5px;
+  font-size: 12.5px;
 }
 
 .golive-dot {
@@ -2144,16 +2211,18 @@ body.col-resizing {
 }
 
 .golive-elapsed {
-  margin-left: auto;
   font-variant-numeric: tabular-nums;
   color: var(--text-dim);
 }
 
+/* Errors can be long ("failed to lookup address information…") — let it take
+   the room it needs on one line rather than reflowing the whole bar. */
 .golive-msg {
-  margin-left: auto;
   color: var(--text-dim);
   font-size: 12px;
-  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .golive-live .golive-dot {
@@ -2177,8 +2246,12 @@ body.col-resizing {
   gap: 12px;
 }
 
-.golive-row {
+/* One row on a wide window, wrapping sensibly as it narrows. Each field
+   declares how eagerly it grows and the width below which it wraps. */
+.golive-grid {
   display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
   gap: 12px;
 }
 
@@ -2188,15 +2261,24 @@ body.col-resizing {
   gap: 5px;
   font-size: 12px;
   color: var(--text-dim);
+  min-width: 0;
 }
 
-.golive-field.golive-grow {
-  flex: 1;
+.golive-field.golive-host {
+  flex: 2 1 190px;
 }
-
+.golive-field.golive-mount {
+  flex: 1.4 1 150px;
+}
+.golive-field.golive-user,
+.golive-field.golive-pass {
+  flex: 1 1 140px;
+}
 .golive-field.golive-port {
-  width: 120px;
-  flex-shrink: 0;
+  flex: 0 0 88px;
+}
+.golive-field.golive-bitrate {
+  flex: 0 0 116px;
 }
 
 .golive-field input,
@@ -2208,6 +2290,18 @@ body.col-resizing {
   padding: 9px 28px 9px 10px;
   font-size: 13.5px;
   font-family: inherit;
+  /* Inputs carry an intrinsic min-width that would otherwise stop the row
+     from wrapping down to the flex-basis widths set above. */
+  width: 100%;
+  min-width: 0;
+}
+
+.golive-hint {
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  max-width: 100ch;
 }
 
 .golive-field input:focus,
@@ -2242,25 +2336,30 @@ body.col-resizing {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex: 1 1 100%;
   font-size: 12.5px;
   color: var(--text-dim);
 }
 
+/* Last item in the field row, sitting on the inputs' baseline. */
 .golive-actions {
-  margin-top: 4px;
+  flex: 0 0 auto;
+  margin-left: auto;
 }
 
 .golive-btn {
-  width: 100%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   border: none;
-  border-radius: 9px;
-  padding: 13px;
-  font-size: 14.5px;
+  border-radius: 8px;
+  padding: 0 22px;
+  /* Matches the inputs' rendered height so the row bottoms line up. */
+  height: 38px;
+  font-size: 13.5px;
   font-weight: 700;
+  white-space: nowrap;
   cursor: pointer;
 }
 

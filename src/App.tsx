@@ -1233,6 +1233,12 @@ export default function App() {
         </div>
       </header>
 
+      {/* Slides in directly under the header — an inline bar, not an overlay,
+          so editing connection details can't be dismissed by a stray click. */}
+      {goLiveOpen && (
+        <GoLivePanel onClose={() => setGoLiveOpen(false)} onError={showStatus} />
+      )}
+
       {status && <div className="status-banner">{status}</div>}
 
       {enrichProgress && (
@@ -1861,10 +1867,6 @@ export default function App() {
             }
           }}
         />
-      )}
-
-      {goLiveOpen && (
-        <GoLivePanel onClose={() => setGoLiveOpen(false)} onError={showStatus} />
       )}
 
       {shareTarget && (
