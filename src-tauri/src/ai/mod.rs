@@ -7,10 +7,34 @@
 //! tier for authoritative confirmation; a drafted playlist goes through the
 //! Mirror Engine like any pasted list. Keys live in the OS keychain.
 
+use std::time::Duration;
+
 use serde::Deserialize;
 use serde_json::json;
 
 use crate::net::http;
+
+/// LLM calls override the shared client's 20 s timeout. That deadline is sized
+/// for quick MusicBrainz/oEmbed lookups, but a completion runs for as long as
+/// the model takes to write it — a 100-track playlist draft is well over a
+/// minute, and the short timeout was cutting it off mid-generation.
+const LLM_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Local models generate far slower than a hosted API (CPU inference on a big
+/// model can take many minutes), so Ollama gets a longer leash still.
+const LLM_TIMEOUT_LOCAL: Duration = Duration::from_secs(900);
+
+/// Transport failures, worded for the person reading the status bar. reqwest
+/// renders a timeout as "error sending request", which reads like the network
+/// is down rather than "the model is still writing" — the actionable part is
+/// that a smaller batch finishes sooner.
+fn transport_err(provider: &str, e: &reqwest::Error) -> String {
+    if e.is_timeout() {
+        format!("{provider} timed out while writing the response — try a smaller track count.")
+    } else {
+        format!("{provider} request failed: {e}")
+    }
+}
 
 /// Provider selection + credentials, resolved from settings + keychain.
 #[derive(Debug, Clone)]
@@ -322,10 +346,11 @@ async fn anthropic_call(
         .header("x-api-key", api_key)
         .header("anthropic-version", "2023-06-01")
         .header("content-type", "application/json")
+        .timeout(LLM_TIMEOUT)
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("Anthropic request failed: {e}"))?;
+        .map_err(|e| transport_err("Anthropic", &e))?;
     let body = checked_body(resp, "Anthropic").await?;
     let parsed: Resp =
         serde_json::from_str(&body).map_err(|e| format!("Anthropic parse failed: {e}"))?;
@@ -387,10 +412,11 @@ async fn openai_call(
     let resp = http()
         .post("https://api.openai.com/v1/chat/completions")
         .header("Authorization", format!("Bearer {api_key}"))
+        .timeout(LLM_TIMEOUT)
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("OpenAI request failed: {e}"))?;
+        .map_err(|e| transport_err("OpenAI", &e))?;
     let body = checked_body(resp, "OpenAI").await?;
     let parsed: Resp =
         serde_json::from_str(&body).map_err(|e| format!("OpenAI parse failed: {e}"))?;
@@ -433,10 +459,17 @@ async fn ollama_call(
     });
     let resp = http()
         .post(format!("{host}/api/generate"))
+        .timeout(LLM_TIMEOUT_LOCAL)
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("Ollama request failed (is it running?): {e}"))?;
+        .map_err(|e| {
+            if e.is_timeout() {
+                transport_err("Ollama", &e)
+            } else {
+                format!("Ollama request failed (is it running?): {e}")
+            }
+        })?;
     let body = checked_body(resp, "Ollama").await?;
     let parsed: Resp =
         serde_json::from_str(&body).map_err(|e| format!("Ollama parse failed: {e}"))?;
@@ -506,10 +539,11 @@ async fn gemini_call(
     let resp = http()
         .post(url)
         .header("x-goog-api-key", api_key)
+        .timeout(LLM_TIMEOUT)
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("Gemini request failed: {e}"))?;
+        .map_err(|e| transport_err("Gemini", &e))?;
     let body = checked_body(resp, "Gemini").await?;
     let parsed: Resp =
         serde_json::from_str(&body).map_err(|e| format!("Gemini parse failed: {e}"))?;
