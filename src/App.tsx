@@ -23,6 +23,7 @@ import {
   type ColumnPrefs,
 } from "./lib/columnPrefs";
 import GoLivePanel from "./components/GoLivePanel";
+import UpdateCard from "./components/UpdateCard";
 import AddUrlModal from "./components/AddUrlModal";
 import BuildPlaylistWithAIModal from "./components/BuildPlaylistWithAIModal";
 import WelcomeModal from "./components/WelcomeModal";
@@ -945,6 +946,44 @@ export default function App() {
       playCount: 0,
       addedAt: 0,
     });
+  };
+
+  // ----- In-app updates ----------------------------------------------------
+  // A newer release is downloaded, verified and staged in the background; the
+  // card only appears once that's done, so the click is a restart. Checked a
+  // little after launch (not competing with startup) and every six hours.
+  const [updateReady, setUpdateReady] = useState<ipc.StagedUpdate | null>(null);
+  useEffect(() => {
+    // A dev binary isn't an installed bundle — there is nothing to replace.
+    if (import.meta.env.DEV) return;
+    let cancelled = false;
+    let staged = false;
+    const look = () => {
+      if (staged) return;
+      ipc
+        .stageUpdate()
+        .then((u) => {
+          if (cancelled || !u) return;
+          staged = true;
+          setUpdateReady(u);
+        })
+        // Offline, or no manifest published yet: quietly try again later.
+        .catch(() => {});
+    };
+    const first = window.setTimeout(look, 15_000);
+    const every = window.setInterval(look, 6 * 60 * 60 * 1000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(first);
+      window.clearInterval(every);
+    };
+  }, []);
+  const relaunchForUpdate = () => {
+    if (onAir) {
+      showStatus("Finish your broadcast first — the update installs when you relaunch.");
+      return;
+    }
+    ipc.relaunchApp().catch((e) => showStatus(`${e}`));
   };
 
   // ----- Live Media: the Go Live on-air folder ------------------------------
@@ -1992,6 +2031,10 @@ export default function App() {
             }
           }}
         />
+      )}
+
+      {updateReady && windowSize === "full" && (
+        <UpdateCard version={updateReady.version} onAir={onAir} onRelaunch={relaunchForUpdate} />
       )}
 
       {shareTarget && (

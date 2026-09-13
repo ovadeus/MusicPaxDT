@@ -38,6 +38,8 @@ tokio = { version = "1.52.3", features = ["time"] }
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 tauri-plugin-localhost = "2.3.2"
 portpicker = "0.1.1"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 [dev-dependencies]
 tokio = { version = "1.52.3", features = ["rt", "macros"] }

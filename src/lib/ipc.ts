@@ -4,6 +4,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import type {
   AudioDevice,
   EngineStatus,
@@ -667,6 +669,40 @@ export function setYoutubeApiKey(key: string): Promise<void> {
 /// through the opener plugin. `opener:default` covers http/https.
 export function openExternal(url: string): Promise<void> {
   return openUrl(url);
+}
+
+// ----- In-app updates ----------------------------------------------------------
+
+export interface StagedUpdate {
+  version: string;
+  notes: string | null;
+}
+
+/// Look for a newer release and, if there is one, download it, verify its
+/// signature and stage it — all in the background. Resolves with the staged
+/// version, or null when this build is current. The running app is untouched
+/// until relaunchApp(), which is what makes "Relaunch to update" instant.
+export async function stageUpdate(
+  onProgress?: (fraction: number) => void,
+): Promise<StagedUpdate | null> {
+  const update = await checkForUpdate();
+  if (!update) return null;
+  let total = 0;
+  let received = 0;
+  await update.downloadAndInstall((ev) => {
+    if (ev.event === "Started") {
+      total = ev.data.contentLength ?? 0;
+    } else if (ev.event === "Progress") {
+      received += ev.data.chunkLength;
+      if (total > 0) onProgress?.(received / total);
+    }
+  });
+  return { version: update.version, notes: update.body ?? null };
+}
+
+/// Quit and start the (already staged) new version.
+export function relaunchApp(): Promise<void> {
+  return relaunch();
 }
 
 /// Check a YouTube Data API key (1 quota unit) before saving it. Resolves with

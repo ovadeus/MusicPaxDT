@@ -116,6 +116,16 @@ thiserror.
 - Run `cargo test -- --include-ignored` for the live audio tests (needs an
   output device); plain `cargo test` skips them.
 
+- In-app updates (tauri-plugin-updater, 2026-09-13): the app fetches
+  releases/latest/download/latest.json from GitHub, stages a newer build in the
+  background, then shows the "Relaunch to update" card (UpdateCard.tsx; held
+  while Go Live is on air). Every release MUST ship MUSICPAX.app.tar.gz + .sig +
+  latest.json (scripts/updater-manifest.sh; build-signed.sh refuses without
+  TAURI_SIGNING_PRIVATE_KEY) and be a full release, not a prerelease — GitHub's
+  `latest` skips prereleases. Private key: ~/.tauri/musicpax-updater.key (outside
+  the repo, back it up); public key in tauri.conf.json plugins.updater.pubkey.
+  Skipped in dev builds (import.meta.env.DEV) — a dev binary isn't a bundle.
+
 ## .mpx import
 - MusicPax `.mpx` playlist files are plain UTF-8 JSON (current export). Parser
   is sources/mpx.rs; import_mpx_playlist command maps tracks → STREAM_PLAYABLE

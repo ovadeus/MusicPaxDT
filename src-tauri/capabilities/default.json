@@ -10,6 +10,8 @@
     "core:default",
     "opener:default",
     "dialog:default",
+    "updater:default",
+    "process:default",
     "allow-app-commands"
   ]
 }

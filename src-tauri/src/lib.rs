@@ -34,6 +34,10 @@ pub fn run() {
 
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        // In-app updates: the frontend checks, downloads and stages a newer
+        // release in the background, then offers one-click "Relaunch to update".
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build());
     if !cfg!(dev) {

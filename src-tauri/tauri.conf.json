@@ -15,9 +15,18 @@
       "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data: https: http:; media-src 'self' https: http: blob:; frame-src https://www.youtube.com https://www.youtube-nocookie.com; script-src 'self' https://www.youtube.com; connect-src 'self' ipc: http://ipc.localhost https: http:"
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEYxM0VBRjMyNjBGQUE2OTkKUldTWnB2cGdNcTgrOFRzMkZwYTlTMWpNNUExb3ROMXhKeE5FT3l5YUU2MXlxbDZka1NhOE9ieWkK",
+      "endpoints": [
+        "https://github.com/ovadeus/MusicPaxDT/releases/latest/download/latest.json"
+      ]
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

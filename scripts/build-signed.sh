@@ -58,6 +58,19 @@ else
   echo "→ Notarizing with Apple ID: ${APPLE_ID} (team ${APPLE_TEAM_ID})."
 fi
 
+# The in-app updater needs every release signed with the updater key too, or
+# installed copies can't verify (and so won't install) the new version.
+if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
+  cat >&2 <<'MSG'
+✗ TAURI_SIGNING_PRIVATE_KEY is not set, so no updater artifacts would be built
+  and installed apps could never update to this release. Add to .env.notary:
+    TAURI_SIGNING_PRIVATE_KEY=/absolute/path/to/musicpax-updater.key
+    TAURI_SIGNING_PRIVATE_KEY_PASSWORD=
+MSG
+  exit 1
+fi
+echo "→ Updater artifacts will be signed (key file: ${TAURI_SIGNING_PRIVATE_KEY})."
+
 echo "→ Building signed + notarized universal DMG (this takes several minutes)…"
 npm run tauri build -- --target universal-apple-darwin
 
@@ -72,6 +85,8 @@ if [[ -d "$APP" ]]; then
 fi
 if [[ -n "$DMG" ]]; then
   echo "• staple ticket:"; xcrun stapler validate "$DMG" 2>&1 | sed 's/^/    /' || true
+  echo "• updater manifest:"
+  ./scripts/updater-manifest.sh "${RELEASE_NOTES:-}" 2>&1 | sed 's/^/    /'
   echo
   echo "✓ Done: $DMG"
 else

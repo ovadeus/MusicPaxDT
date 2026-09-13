@@ -53,3 +53,31 @@ Notarization typically adds 1–5 minutes while Apple processes the upload.
 Testers just open the DMG and drag the app to Applications — **no `xattr` step
 needed** once the build is notarized. To cut a new version, bump `version` in
 `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml`.
+
+## In-app updates
+
+Installed copies check the latest GitHub release for `latest.json`, download
+and verify the new build in the background, then show a "Relaunch to update"
+card. For that to work every release needs, alongside the DMG:
+
+    MUSICPAX.app.tar.gz        the update itself (signed + notarized app inside)
+    MUSICPAX.app.tar.gz.sig    its updater signature
+    latest.json                version, notes, download URL, signature
+
+`./scripts/build-signed.sh` produces all three (it refuses to build without
+`TAURI_SIGNING_PRIVATE_KEY` in `.env.notary`, because a release without them
+strands every installed copy). Set `RELEASE_NOTES` to put notes in the card.
+Then upload everything together:
+
+    gh release create vX.Y.Z \
+      src-tauri/target/universal-apple-darwin/release/bundle/dmg/MUSICPAX_X.Y.Z_universal.dmg \
+      src-tauri/target/universal-apple-darwin/release/bundle/macos/MUSICPAX.app.tar.gz \
+      src-tauri/target/universal-apple-darwin/release/bundle/macos/MUSICPAX.app.tar.gz.sig \
+      src-tauri/target/universal-apple-darwin/release/bundle/macos/latest.json \
+      --title "MUSICPAX X.Y.Z" --notes "..."
+
+**Publish as a full release, not a prerelease.** The updater fetches
+`releases/latest/download/latest.json`, and GitHub's `latest` skips prereleases.
+
+The private key lives outside the repo (`~/.tauri/musicpax-updater.key`).
+Back it up: if it is lost, no installed copy can ever update again.
