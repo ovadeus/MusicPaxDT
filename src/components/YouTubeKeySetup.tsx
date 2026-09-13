@@ -101,9 +101,9 @@ export default function YouTubeKeySetup({ onClose, onSaved }: Props) {
             <div className="ytkey-body">
               <strong>Turn on the YouTube Data API</strong>
               <p>Sign in, pick any project (or let Google make one), press Enable.</p>
-              <a className="ytkey-link" href={ENABLE_URL} target="_blank" rel="noreferrer">
+              <button className="ytkey-link" onClick={() => ipc.openExternal(ENABLE_URL)}>
                 Open Google Cloud <ExternalLink size={13} />
-              </a>
+              </button>
             </div>
           </li>
 
@@ -114,9 +114,9 @@ export default function YouTubeKeySetup({ onClose, onSaved }: Props) {
               <p>
                 Press <em>Create credentials</em> → <em>API key</em>, then copy it.
               </p>
-              <a className="ytkey-link" href={CREDENTIALS_URL} target="_blank" rel="noreferrer">
+              <button className="ytkey-link" onClick={() => ipc.openExternal(CREDENTIALS_URL)}>
                 Open Credentials <ExternalLink size={13} />
-              </a>
+              </button>
             </div>
           </li>
 

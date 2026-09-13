@@ -3,6 +3,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import type {
   AudioDevice,
   EngineStatus,
@@ -635,6 +636,15 @@ export function integrationStatus(): Promise<IntegrationStatus> {
 
 export function setYoutubeApiKey(key: string): Promise<void> {
   return invoke<void>("set_youtube_api_key", { key });
+}
+
+/// Open a URL in the user's default browser.
+///
+/// `<a target="_blank">` silently does nothing inside a Tauri webview — there
+/// is no browser chrome to open a tab in — so every outbound link has to go
+/// through the opener plugin. `opener:default` covers http/https.
+export function openExternal(url: string): Promise<void> {
+  return openUrl(url);
 }
 
 /// Check a YouTube Data API key (1 quota unit) before saving it. Resolves with

@@ -1,3 +1,6 @@
+import type { MouseEvent } from "react";
+import * as ipc from "../lib/ipc";
+
 /// A tiny, dependency-free Markdown renderer for user-authored liner notes.
 /// Stays offline-first (no react-markdown tree) and is XSS-safe: input is
 /// HTML-escaped first, then only a known set of tags is emitted, and links are
@@ -111,5 +114,20 @@ export function renderMarkdown(md: string): string {
 
 /// Renders Markdown text as formatted, read-only HTML.
 export default function Markdown({ text, className }: { text: string; className?: string }) {
-  return <div className={className} dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }} />;
+  // These links live in generated HTML, so they can't carry their own handler
+  // — and an <a> opens nothing inside a Tauri webview. Delegate from the
+  // container instead. inline() already limits hrefs to http/https/mailto.
+  const openLink = (e: MouseEvent<HTMLDivElement>) => {
+    const href = (e.target as HTMLElement).closest("a")?.getAttribute("href");
+    if (!href) return;
+    e.preventDefault();
+    void ipc.openExternal(href);
+  };
+  return (
+    <div
+      className={className}
+      onClick={openLink}
+      dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }}
+    />
+  );
 }

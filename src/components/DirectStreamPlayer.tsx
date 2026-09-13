@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, ExternalLink, Music, X } from "lucide-react";
+import * as ipc from "../lib/ipc";
 import type { Track } from "../lib/types";
 
 interface Props {
@@ -143,15 +144,13 @@ export default function DirectStreamPlayer(props: Props) {
           >
             <ChevronRight size={16} />
           </button>
-          <a
+          <button
             className="stream-player-link"
-            href={track.uri}
-            target="_blank"
-            rel="noreferrer"
+            onClick={() => ipc.openExternal(track.uri)}
             title="Open the file"
           >
             <ExternalLink size={13} />
-          </a>
+          </button>
           <button className="stream-player-close" onClick={props.onClose} title="Stop stream">
             <X size={14} />
           </button>

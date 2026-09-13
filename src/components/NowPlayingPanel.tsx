@@ -286,14 +286,12 @@ export default function NowPlayingPanel({
                     <>
                       <p className="np-bio-text">{bio.extract}</p>
                       {bio.url && (
-                        <a
+                        <button
                           className="np-bio-link"
-                          href={bio.url}
-                          target="_blank"
-                          rel="noreferrer"
+                          onClick={() => ipc.openExternal(bio.url!)}
                         >
                           Wikipedia <ExternalLink size={11} />
-                        </a>
+                        </button>
                       )}
                     </>
                   ) : (
