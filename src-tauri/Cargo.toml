@@ -1,6 +1,6 @@
 [package]
 name = "stack-app"
-version = "0.1.5"
+version = "0.1.6"
 description = "STACK — local-first music & entertainment system"
 authors = ["STACK contributors"]
 edition = "2021"
