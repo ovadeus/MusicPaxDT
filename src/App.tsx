@@ -696,7 +696,10 @@ export default function App() {
           await ipc.play();
           setNow(await ipc.nowPlaying());
           setEngineStat(null);
-          setSource("library");
+          // Starting a track from a line-in or browse panel brings the library
+          // into view — but Live mode is where its own tracks are played
+          // from, and leaving it on every double-click threw the user out.
+          setSource((s) => (s === "live" ? s : "library"));
           setPositionMs(0);
           setTracks((prev) =>
             prev.map((t) =>
@@ -724,7 +727,7 @@ export default function App() {
           setEngineStat(null);
           // radio/stream keep their browse panel open; others go to Library
           if (track.sourceKind !== "radio" && track.sourceKind !== "stream") {
-            setSource("library");
+            setSource((s) => (s === "live" ? s : "library"));
           }
           if (track.id >= 0) {
             ipc.recordPlay(track.id).catch((e) => showStatus(`${e}`));
