@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -125,6 +126,52 @@ fn write_tags_inner(track: &Track, path: &Path) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Library rows whose file may have moved, keyed by file name. A scan
+/// consults this before importing: a file that matches a row by name and
+/// exact duration, where that row's old path no longer exists, is the same
+/// track in a new place — so the row is repointed (keeping its id, play
+/// count and playlist slots) instead of a duplicate landing beside a dead
+/// entry. Name alone is not enough ("01 Intro.mp3" recurs across albums);
+/// duration to the millisecond is what makes the match safe.
+struct MovedIndex {
+    by_name: HashMap<String, Vec<(i64, String, Option<i64>)>>,
+}
+
+impl MovedIndex {
+    fn build(conn: &Connection) -> AppResult<Self> {
+        let mut by_name: HashMap<String, Vec<(i64, String, Option<i64>)>> = HashMap::new();
+        for (id, uri, duration_ms) in db::owned_file_rows(conn)? {
+            if let Some(name) = Path::new(&uri).file_name().and_then(|n| n.to_str()) {
+                by_name
+                    .entry(name.to_string())
+                    .or_default()
+                    .push((id, uri.clone(), duration_ms));
+            }
+        }
+        Ok(Self { by_name })
+    }
+
+    /// The id of a missing row this file is the moved version of, if any.
+    /// Existence is checked lazily and only for name matches, so a scan never
+    /// stats the whole library. A matched row is removed so two identical
+    /// files can't both claim it.
+    fn take_match(&mut self, track: &NewTrack) -> Option<i64> {
+        let name = Path::new(&track.uri).file_name()?.to_str()?;
+        let candidates = self.by_name.get_mut(name)?;
+        let pos = candidates.iter().position(|(_, old_uri, duration_ms)| {
+            matches!((duration_ms, track.duration_ms), (Some(a), Some(b)) if *a == b)
+                && !Path::new(old_uri).exists()
+        })?;
+        Some(candidates.remove(pos).0)
+    }
+}
+
+enum Outcome {
+    Imported,
+    Relinked,
+    Skipped,
+}
+
 /// Recursively import every audio file under `root` into the library. Dedupes by uri.
 pub fn import_folder(conn: &Connection, root: &Path) -> AppResult<ImportResult> {
     import_folder_as(conn, root, None)
@@ -142,9 +189,11 @@ pub fn import_folder_as(
     let mut result = ImportResult {
         imported: 0,
         skipped: 0,
+        relinked: 0,
         errors: Vec::new(),
     };
     let added_at = now_unix();
+    let mut moved = MovedIndex::build(conn)?;
 
     // Batch inserts in a transaction instead of one implicit (fsync-ed)
     // transaction per file — a large import is dramatically faster. Commit in
@@ -181,9 +230,22 @@ pub fn import_folder_as(
         if let Some(kind) = source_kind {
             track.source_kind = kind.to_string();
         }
-        match db::insert_track(&tx, &track, added_at) {
-            Ok(true) => result.imported += 1,
-            Ok(false) => result.skipped += 1,
+        // Already here → skip. New path but a missing row matches it → the
+        // file moved; repoint that row. Otherwise it's genuinely new.
+        let outcome = match db::get_track_by_uri(&tx, &track.uri) {
+            Ok(Some(_)) => Ok(Outcome::Skipped),
+            Ok(None) => match moved.take_match(&track) {
+                Some(id) => db::relink_track(&tx, id, &track.uri, &track.source_kind)
+                    .map(|_| Outcome::Relinked),
+                None => db::insert_track(&tx, &track, added_at)
+                    .map(|new| if new { Outcome::Imported } else { Outcome::Skipped }),
+            },
+            Err(e) => Err(e),
+        };
+        match outcome {
+            Ok(Outcome::Imported) => result.imported += 1,
+            Ok(Outcome::Relinked) => result.relinked += 1,
+            Ok(Outcome::Skipped) => result.skipped += 1,
             Err(e) => result
                 .errors
                 .push(format!("{}: {e}", entry.path().display())),
@@ -207,8 +269,13 @@ mod tests {
 
     /// Minimal valid 16-bit mono PCM WAV (0.1 s of silence).
     fn write_test_wav(path: &Path) {
+        write_test_wav_tenths(path, 1);
+    }
+
+    /// Same, `tenths` × 0.1 s long — so two files can share a name but not a duration.
+    fn write_test_wav_tenths(path: &Path, tenths: u32) {
         let sample_rate: u32 = 44_100;
-        let n_samples: u32 = sample_rate / 10;
+        let n_samples: u32 = sample_rate / 10 * tenths;
         let data_len = n_samples * 2;
         let mut bytes = Vec::new();
         bytes.extend_from_slice(b"RIFF");
@@ -233,6 +300,46 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("nested")).unwrap();
         dir
+    }
+
+    /// A file that moved is the same track: scanning its new home repoints the
+    /// existing row (same id, play count, playlist slots) instead of importing
+    /// a duplicate beside a dead one. A different file that merely shares the
+    /// name — different duration — is not mistaken for it.
+    #[test]
+    fn rescan_relinks_a_moved_file_instead_of_duplicating_it() {
+        // Canonical, as the scanner stores paths (macOS temp dirs live under
+        // /var → /private/var), so the prefix query below matches.
+        let dir = temp_dir("relink").canonicalize().unwrap();
+        let old = dir.join("song.wav");
+        write_test_wav(&old);
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::library::db::open_in_memory_for_tests(&conn);
+        assert_eq!(import_folder(&conn, &dir).unwrap().imported, 1);
+        let id = crate::library::db::list_tracks(&conn, None, None, None, 10, 0).unwrap()[0].id;
+
+        // The file leaves; a same-named but longer file appears elsewhere.
+        let new_home = dir.join("nested");
+        std::fs::rename(&old, new_home.join("song.wav")).unwrap();
+        let impostor_dir = dir.join("other");
+        std::fs::create_dir_all(&impostor_dir).unwrap();
+        write_test_wav_tenths(&impostor_dir.join("song.wav"), 3);
+
+        let r = import_folder(&conn, &impostor_dir).unwrap();
+        assert_eq!((r.imported, r.relinked, r.skipped), (1, 0, 0), "name alone must not relink");
+
+        // The real file's new home is the Live folder: the old row follows it there.
+        let r = import_folder_as(&conn, &new_home, Some("live")).unwrap();
+        assert_eq!((r.imported, r.relinked, r.skipped), (0, 1, 0), "errors: {:?}", r.errors);
+        let t = crate::library::db::get_track(&conn, id).unwrap();
+        assert!(t.uri.ends_with("nested/song.wav"), "{}", t.uri);
+        assert_eq!(t.source_kind, "live");
+
+        // Rescanning is idempotent: nothing new, nothing relinked twice.
+        let r = import_folder_as(&conn, &new_home, Some("live")).unwrap();
+        assert_eq!((r.imported, r.relinked, r.skipped), (0, 0, 1));
+        let under: Vec<_> = crate::library::db::list_tracks_under(&conn, dir.to_str().unwrap()).unwrap();
+        assert_eq!(under.len(), 2, "the moved file and the impostor — no duplicate");
     }
 
     #[test]

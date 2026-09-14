@@ -82,6 +82,10 @@ thiserror.
       files already under the folder); the left nav is the folder's directory
       tree (LiveMediaSidebar, derived from paths — each folder is a playlist);
       YouTube/Spotify/AI buttons are hidden and stream playback stops on entry.
+      Every folder scan (library or Live) relinks a moved file instead of
+      duplicating it: a row whose old path is gone and whose file name AND exact
+      duration_ms match is repointed (scan::MovedIndex → db::relink_track), and
+      re-homed to the scanned folder's kind. Name alone never relinks.
       Deliberately a hard line, not per-track airability: streaming sources' terms
       forbid re-broadcasting, so aggregated playlists are never in the live view.
       Go Live is an inline accordion under the header (not a modal).

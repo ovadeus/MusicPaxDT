@@ -38,6 +38,8 @@ export type MediaType =
 export interface ImportResult {
   imported: number;
   skipped: number;
+  /// Rows whose file had moved and were repointed rather than re-imported.
+  relinked: number;
   errors: string[];
 }
 

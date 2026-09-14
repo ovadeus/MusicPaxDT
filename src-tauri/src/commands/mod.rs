@@ -91,6 +91,16 @@ const LIVE_MEDIA_DIR_KEY: &str = "live.media_dir";
 /// its own world, and its files never mix into the everyday library.
 const LIVE_SOURCE_KIND: &str = "live";
 
+/// The scanner canonicalizes every file path it stores, so the Live folder
+/// must be held and queried in the same form — a symlinked folder (say
+/// ~/Music on an external drive) or a /var-style path would otherwise list
+/// nothing. Falls back to the path as given if it can't be resolved.
+fn canonical_dir(path: &str) -> String {
+    std::fs::canonicalize(path.trim())
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path.trim().to_string())
+}
+
 /// The Live Media folder, if one has been chosen. Go Live airs only local
 /// files, and this folder is the on-air list: aggregated sources (YouTube,
 /// radio) can't be re-broadcast under their terms, so the live view is
@@ -98,7 +108,9 @@ const LIVE_SOURCE_KIND: &str = "live";
 #[tauri::command]
 pub fn live_media_dir(state: State<'_, AppState>) -> AppResult<Option<String>> {
     let conn = lock_unpoisoned(&state.db);
-    db::get_setting(&conn, LIVE_MEDIA_DIR_KEY)
+    Ok(db::get_setting(&conn, LIVE_MEDIA_DIR_KEY)?
+        .filter(|d| !d.trim().is_empty())
+        .map(|d| canonical_dir(&d)))
 }
 
 /// Choose the Live Media folder and scan it. The files join the main library
@@ -112,8 +124,9 @@ pub async fn set_live_media_dir(
     let db = state.db.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let conn = lock_unpoisoned(&db);
-        db::set_setting(&conn, LIVE_MEDIA_DIR_KEY, path.trim())?;
-        scan::import_folder_as(&conn, &PathBuf::from(path.trim()), Some(LIVE_SOURCE_KIND))
+        let dir = canonical_dir(&path);
+        db::set_setting(&conn, LIVE_MEDIA_DIR_KEY, &dir)?;
+        scan::import_folder_as(&conn, &PathBuf::from(&dir), Some(LIVE_SOURCE_KIND))
     })
     .await
     .map_err(|e| AppError::Other(format!("live media scan failed: {e}")))?
@@ -127,10 +140,12 @@ pub async fn rescan_live_media(state: State<'_, AppState>) -> AppResult<ImportRe
     tauri::async_runtime::spawn_blocking(move || {
         let conn = lock_unpoisoned(&db);
         match db::get_setting(&conn, LIVE_MEDIA_DIR_KEY)? {
-            Some(dir) if !dir.trim().is_empty() => {
-                scan::import_folder_as(&conn, &PathBuf::from(dir), Some(LIVE_SOURCE_KIND))
-            }
-            _ => Ok(ImportResult { imported: 0, skipped: 0, errors: Vec::new() }),
+            Some(dir) if !dir.trim().is_empty() => scan::import_folder_as(
+                &conn,
+                &PathBuf::from(canonical_dir(&dir)),
+                Some(LIVE_SOURCE_KIND),
+            ),
+            _ => Ok(ImportResult { imported: 0, skipped: 0, relinked: 0, errors: Vec::new() }),
         }
     })
     .await
@@ -144,7 +159,9 @@ pub async fn list_live_media(state: State<'_, AppState>) -> AppResult<Vec<Track>
     tauri::async_runtime::spawn_blocking(move || {
         let conn = lock_unpoisoned(&db);
         match db::get_setting(&conn, LIVE_MEDIA_DIR_KEY)? {
-            Some(dir) if !dir.trim().is_empty() => db::list_tracks_under(&conn, &dir),
+            Some(dir) if !dir.trim().is_empty() => {
+                db::list_tracks_under(&conn, &canonical_dir(&dir))
+            }
             _ => Ok(Vec::new()),
         }
     })

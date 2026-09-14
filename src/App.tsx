@@ -1036,7 +1036,10 @@ export default function App() {
     setBusy(true);
     try {
       const r = await ipc.setLiveMediaDir(folder);
-      showStatus(`Live Media: ${r.imported} ${r.imported === 1 ? "file" : "files"} found`);
+      showStatus(
+        `Live Media: ${r.imported} ${r.imported === 1 ? "file" : "files"} found` +
+          (r.relinked ? `, ${r.relinked} moved ${r.relinked === 1 ? "file" : "files"} relinked` : ""),
+      );
       setLiveFolder(null);
       await refreshLiveMedia();
     } catch (e) {
@@ -1050,9 +1053,11 @@ export default function App() {
     setBusy(true);
     try {
       const r = await ipc.rescanLiveMedia();
-      showStatus(
-        r.imported ? `Live Media: ${r.imported} new ${r.imported === 1 ? "file" : "files"}` : "Live Media is up to date",
-      );
+      const parts = [
+        r.imported ? `${r.imported} new ${r.imported === 1 ? "file" : "files"}` : "",
+        r.relinked ? `${r.relinked} moved ${r.relinked === 1 ? "file" : "files"} relinked` : "",
+      ].filter(Boolean);
+      showStatus(parts.length ? `Live Media: ${parts.join(", ")}` : "Live Media is up to date");
       await refreshLiveMedia();
     } catch (e) {
       showStatus(`Live Media scan failed: ${e}`);
@@ -1072,7 +1077,8 @@ export default function App() {
     try {
       const result = await ipc.importFolder(folder);
       const errs = result.errors.length ? `, ${result.errors.length} errors` : "";
-      showStatus(`Imported ${result.imported}, skipped ${result.skipped}${errs}`);
+      const moved = result.relinked ? `, ${result.relinked} moved files relinked` : "";
+      showStatus(`Imported ${result.imported}${moved}, skipped ${result.skipped}${errs}`);
       await refreshTracks();
     } catch (e) {
       showStatus(`Import failed: ${e}`);

@@ -518,6 +518,33 @@ pub fn set_track_uri(conn: &Connection, id: i64, uri: &str) -> AppResult<Track> 
     get_track(conn, id)
 }
 
+/// Repoint a track to where its file turned up, and re-home it to the kind of
+/// the folder it now lives in (a file moved into the Live folder becomes
+/// 'live'; one moved out becomes 'local'). Everything else about the row —
+/// id, play count, rating, playlist membership — is untouched.
+pub fn relink_track(conn: &Connection, id: i64, uri: &str, source_kind: &str) -> AppResult<()> {
+    conn.execute(
+        "UPDATE tracks SET uri = ?1, source_kind = ?2 WHERE id = ?3",
+        params![uri, source_kind, id],
+    )?;
+    Ok(())
+}
+
+/// (id, uri, duration_ms) for every local-file row — the index a scan uses to
+/// recognise a file that has moved (same name and duration, old path gone).
+pub fn owned_file_rows(conn: &Connection) -> AppResult<Vec<(i64, String, Option<i64>)>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, uri, duration_ms FROM tracks
+         WHERE capability = 'OWNED' AND source_kind IN ('local', 'live')",
+    )?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
 pub fn get_track_by_uri(conn: &Connection, uri: &str) -> AppResult<Option<Track>> {
     Ok(conn
         .query_row("SELECT * FROM tracks WHERE uri = ?1", [uri], track_from_row)
