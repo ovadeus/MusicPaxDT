@@ -86,6 +86,10 @@ pub async fn list_tracks(
 
 /// Settings key for the Live Media folder.
 const LIVE_MEDIA_DIR_KEY: &str = "live.media_dir";
+/// source_kind stamped on Live Media rows. They are OWNED, playable local
+/// files, but the aggregated library views exclude this kind: Live mode is
+/// its own world, and its files never mix into the everyday library.
+const LIVE_SOURCE_KIND: &str = "live";
 
 /// The Live Media folder, if one has been chosen. Go Live airs only local
 /// files, and this folder is the on-air list: aggregated sources (YouTube,
@@ -109,7 +113,7 @@ pub async fn set_live_media_dir(
     tauri::async_runtime::spawn_blocking(move || {
         let conn = lock_unpoisoned(&db);
         db::set_setting(&conn, LIVE_MEDIA_DIR_KEY, path.trim())?;
-        scan::import_folder(&conn, &PathBuf::from(path.trim()))
+        scan::import_folder_as(&conn, &PathBuf::from(path.trim()), Some(LIVE_SOURCE_KIND))
     })
     .await
     .map_err(|e| AppError::Other(format!("live media scan failed: {e}")))?
@@ -123,7 +127,9 @@ pub async fn rescan_live_media(state: State<'_, AppState>) -> AppResult<ImportRe
     tauri::async_runtime::spawn_blocking(move || {
         let conn = lock_unpoisoned(&db);
         match db::get_setting(&conn, LIVE_MEDIA_DIR_KEY)? {
-            Some(dir) if !dir.trim().is_empty() => scan::import_folder(&conn, &PathBuf::from(dir)),
+            Some(dir) if !dir.trim().is_empty() => {
+                scan::import_folder_as(&conn, &PathBuf::from(dir), Some(LIVE_SOURCE_KIND))
+            }
             _ => Ok(ImportResult { imported: 0, skipped: 0, errors: Vec::new() }),
         }
     })
@@ -281,7 +287,10 @@ pub async fn update_track_metadata(
         };
         let track = db::update_track_metadata(&conn, track_id, &edit)?;
         // Persist to the file itself for owned local audio.
-        if track.capability == Capability::Owned && track.source_kind == "local" {
+        // Live Media rows are local files too: edits reach the file the same way.
+        if track.capability == Capability::Owned
+            && matches!(track.source_kind.as_str(), "local" | "live")
+        {
             scan::write_tags(&track);
         }
         Ok(track)

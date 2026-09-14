@@ -442,8 +442,9 @@ pub async fn apply_enrichment(
             None => None,
         };
         let db2 = db.clone();
+        // Live Media rows are local files too; enrichment writes to them alike.
         let owned_local = track.capability == crate::library::model::Capability::Owned
-            && track.source_kind == "local";
+            && matches!(track.source_kind.as_str(), "local" | "live");
         let edit = db::TrackEdit {
             title: e.title.or(track.title.clone()),
             artist: e.artist.or(track.artist.clone()),

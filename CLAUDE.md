@@ -76,8 +76,12 @@ thiserror.
       Live Media (2026-09-13): the on-air list is one user-chosen local folder
       (setting live.media_dir; commands live_media_dir/set_live_media_dir/
       rescan_live_media/list_live_media). A "Live" source shows exactly the OWNED
-      tracks under it (db::list_tracks_under, exact prefix — not LIKE). Files join
-      the main library as normal OWNED tracks; the Live view is a filtered query.
+      tracks under it (db::list_tracks_under, exact prefix — not LIKE). Live mode
+      is its own world: its rows carry source_kind 'live' (scan::import_folder_as)
+      and EVERY aggregated-library query excludes that kind (v7 migration retags
+      files already under the folder); the left nav is the folder's directory
+      tree (LiveMediaSidebar, derived from paths — each folder is a playlist);
+      YouTube/Spotify/AI buttons are hidden and stream playback stops on entry.
       Deliberately a hard line, not per-track airability: streaming sources' terms
       forbid re-broadcasting, so aggregated playlists are never in the live view.
       Go Live is an inline accordion under the header (not a modal).

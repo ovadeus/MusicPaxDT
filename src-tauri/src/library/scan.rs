@@ -125,8 +125,20 @@ fn write_tags_inner(track: &Track, path: &Path) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// Recursively import every audio file under `root`. Dedupes by uri.
+/// Recursively import every audio file under `root` into the library. Dedupes by uri.
 pub fn import_folder(conn: &Connection, root: &Path) -> AppResult<ImportResult> {
+    import_folder_as(conn, root, None)
+}
+
+/// `import_folder`, optionally stamping each new row with `source_kind` in
+/// place of the adapter's own. Live Media passes "live" so its files are
+/// playable rows that never surface in the aggregated library views. A file
+/// already in the library (same uri) is left exactly as it was.
+pub fn import_folder_as(
+    conn: &Connection,
+    root: &Path,
+    source_kind: Option<&str>,
+) -> AppResult<ImportResult> {
     let mut result = ImportResult {
         imported: 0,
         skipped: 0,
@@ -165,7 +177,10 @@ pub fn import_folder(conn: &Connection, root: &Path) -> AppResult<ImportResult> 
             .path()
             .canonicalize()
             .unwrap_or_else(|_| entry.path().to_path_buf());
-        let track = read_track(&real);
+        let mut track = read_track(&real);
+        if let Some(kind) = source_kind {
+            track.source_kind = kind.to_string();
+        }
         match db::insert_track(&tx, &track, added_at) {
             Ok(true) => result.imported += 1,
             Ok(false) => result.skipped += 1,

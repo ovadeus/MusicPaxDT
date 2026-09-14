@@ -24,6 +24,7 @@ import {
 } from "./lib/columnPrefs";
 import GoLivePanel from "./components/GoLivePanel";
 import UpdateCard from "./components/UpdateCard";
+import LiveMediaSidebar, { inLiveFolder } from "./components/LiveMediaSidebar";
 import AddUrlModal from "./components/AddUrlModal";
 import BuildPlaylistWithAIModal from "./components/BuildPlaylistWithAIModal";
 import WelcomeModal from "./components/WelcomeModal";
@@ -991,6 +992,12 @@ export default function App() {
   // tracks under one chosen folder — never the aggregated library.
   const [liveDir, setLiveDir] = useState<string | null>(null);
   const [liveTracks, setLiveTracks] = useState<Track[]>([]);
+  // The folder (relative to liveDir) chosen in the Live nav; null = everything.
+  const [liveFolder, setLiveFolder] = useState<string | null>(null);
+  const liveShown =
+    liveFolder == null || !liveDir
+      ? liveTracks
+      : liveTracks.filter((t) => inLiveFolder(liveDir, t.uri, liveFolder));
   const refreshLiveMedia = useCallback(async () => {
     try {
       const dir = await ipc.liveMediaDir();
@@ -1004,6 +1011,10 @@ export default function App() {
   // Opening Go Live switches the main view to Live Media and refreshes it, so
   // files dropped into the folder since last time are already there.
   const openGoLive = useCallback(() => {
+    // Live mode is its own world: streams (YouTube/radio) can't air and
+    // aren't reachable here, so anything of that kind playing stops now.
+    setStream(null);
+    setLiveFolder(null);
     setSource("live");
     setGoLiveOpen(true);
     ipc
@@ -1022,9 +1033,9 @@ export default function App() {
     setBusy(true);
     try {
       const r = await ipc.setLiveMediaDir(folder);
-      showStatus(`Live Media: ${r.imported} added, ${r.skipped} already in the library`);
+      showStatus(`Live Media: ${r.imported} ${r.imported === 1 ? "file" : "files"} found`);
+      setLiveFolder(null);
       await refreshLiveMedia();
-      await refreshTracks();
     } catch (e) {
       showStatus(`Live Media scan failed: ${e}`);
     } finally {
@@ -1040,7 +1051,6 @@ export default function App() {
         r.imported ? `Live Media: ${r.imported} new ${r.imported === 1 ? "file" : "files"}` : "Live Media is up to date",
       );
       await refreshLiveMedia();
-      if (r.imported) await refreshTracks();
     } catch (e) {
       showStatus(`Live Media scan failed: ${e}`);
     } finally {
@@ -1275,30 +1285,36 @@ export default function App() {
                   </option>
                 ))}
               </select>
-              <button
-                className="settings-button brand-youtube"
-                onClick={() => setYtSearchOpen(true)}
-                title="Search YouTube"
-                aria-label="Search YouTube"
-              >
-                <YouTubeIcon size={18} />
-              </button>
-              <button
-                className="settings-button brand-spotify"
-                onClick={() => setAddUrlMode("spotify")}
-                title="Import Spotify Playlist"
-                aria-label="Import Spotify Playlist"
-              >
-                <SpotifyIcon size={18} />
-              </button>
-              <button
-                className="settings-button brand-ai"
-                onClick={() => setAiBuildOpen(true)}
-                title="Build Playlist with AI"
-                aria-label="Build Playlist with AI"
-              >
-                <AiIcon size={18} />
-              </button>
+              {/* Adding aggregated music has no place in Live mode: nothing
+                  it produces can go on air. */}
+              {source !== "live" && (
+                <>
+                  <button
+                    className="settings-button brand-youtube"
+                    onClick={() => setYtSearchOpen(true)}
+                    title="Search YouTube"
+                    aria-label="Search YouTube"
+                  >
+                    <YouTubeIcon size={18} />
+                  </button>
+                  <button
+                    className="settings-button brand-spotify"
+                    onClick={() => setAddUrlMode("spotify")}
+                    title="Import Spotify Playlist"
+                    aria-label="Import Spotify Playlist"
+                  >
+                    <SpotifyIcon size={18} />
+                  </button>
+                  <button
+                    className="settings-button brand-ai"
+                    onClick={() => setAiBuildOpen(true)}
+                    title="Build Playlist with AI"
+                    aria-label="Build Playlist with AI"
+                  >
+                    <AiIcon size={18} />
+                  </button>
+                </>
+              )}
               <ManageMusicMenu
                 busy={busy}
                 canEnrich={source === "library" && tracks.length > 0 && enrichProgress == null}
@@ -1466,12 +1482,20 @@ export default function App() {
           </div>
         </div>
       ) : source === "live" ? (
-        <div className="library-layout stream-layout">
-          <div className="stream-col">
-            <LibraryTable
+        <div className="library-layout">
+          {liveDir && (
+            <LiveMediaSidebar
+              dir={liveDir}
               tracks={liveTracks}
-              heading="Live Media"
-              fadeKey="live"
+              selected={liveFolder}
+              onSelect={setLiveFolder}
+            />
+          )}
+          <div className="live-main">
+            <LibraryTable
+              tracks={liveShown}
+              heading={liveFolder ? liveFolder.slice(liveFolder.lastIndexOf("/") + 1) : "Live Media"}
+              fadeKey={`live:${liveFolder ?? ""}`}
               searchable={false}
               emptyMessage={
                 liveDir
@@ -1482,7 +1506,7 @@ export default function App() {
               onQueryChange={() => {}}
               sort={sort}
               onSortChange={setSort}
-              onActivate={(t) => void playTrack(t, liveTracks)}
+              onActivate={(t) => void playTrack(t, liveShown)}
               onEdit={setEditTrack}
               onEnrich={handleEnrichTrack}
               onToggleFavorite={toggleFavorite}

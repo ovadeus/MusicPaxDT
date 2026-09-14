@@ -136,6 +136,24 @@ fn migrate(conn: &Connection) -> AppResult<()> {
         tx.pragma_update(None, "user_version", 6)?;
         tx.commit()?;
     }
+    if version < 7 {
+        // Live Media becomes its own world. Files under the chosen Live folder
+        // were imported as ordinary library rows (source_kind 'local') and so
+        // mixed into the aggregated library; retag them 'live' so they leave
+        // it. Playlist references survive (same ids) and nothing is deleted.
+        // No Live folder configured → the subquery is NULL → no rows match.
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE tracks SET source_kind = 'live'
+             WHERE capability = 'OWNED' AND source_kind = 'local'
+               AND (SELECT value FROM settings WHERE key = 'live.media_dir') IS NOT NULL
+               AND substr(uri, 1, length(rtrim((SELECT value FROM settings WHERE key = 'live.media_dir'), '/') || '/'))
+                   = rtrim((SELECT value FROM settings WHERE key = 'live.media_dir'), '/') || '/'",
+            [],
+        )?;
+        tx.pragma_update(None, "user_version", 7)?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
@@ -322,7 +340,8 @@ pub fn list_tracks(
             let sql = format!(
                 "SELECT * FROM tracks
                  WHERE id IN (SELECT rowid FROM tracks_fts WHERE tracks_fts MATCH ?1)
-                   AND media_type = ?2 ORDER BY {order} LIMIT ?3 OFFSET ?4"
+                   AND media_type = ?2 AND source_kind != 'live'
+                 ORDER BY {order} LIMIT ?3 OFFSET ?4"
             );
             let mut stmt = conn.prepare(&sql)?;
             collect(&mut stmt, params![fts_expr(q), m, limit, offset])?;
@@ -331,6 +350,7 @@ pub fn list_tracks(
             let sql = format!(
                 "SELECT * FROM tracks
                  WHERE id IN (SELECT rowid FROM tracks_fts WHERE tracks_fts MATCH ?1)
+                   AND source_kind != 'live'
                  ORDER BY {order} LIMIT ?2 OFFSET ?3"
             );
             let mut stmt = conn.prepare(&sql)?;
@@ -338,13 +358,18 @@ pub fn list_tracks(
         }
         (None, Some(m)) => {
             let sql = format!(
-                "SELECT * FROM tracks WHERE media_type = ?1 ORDER BY {order} LIMIT ?2 OFFSET ?3"
+                "SELECT * FROM tracks WHERE media_type = ?1 AND source_kind != 'live'
+                 ORDER BY {order} LIMIT ?2 OFFSET ?3"
             );
             let mut stmt = conn.prepare(&sql)?;
             collect(&mut stmt, params![m, limit, offset])?;
         }
         (None, None) => {
-            let sql = format!("SELECT * FROM tracks ORDER BY {order} LIMIT ?1 OFFSET ?2");
+            // Live Media rows are excluded from every aggregated view: Live mode
+            // is a separate world, and its files never mix into the library.
+            let sql = format!(
+                "SELECT * FROM tracks WHERE source_kind != 'live' ORDER BY {order} LIMIT ?1 OFFSET ?2"
+            );
             let mut stmt = conn.prepare(&sql)?;
             collect(&mut stmt, params![limit, offset])?;
         }
@@ -475,8 +500,10 @@ pub fn set_track_favorite(conn: &Connection, id: i64, favorite: bool) -> AppResu
 }
 
 /// (id, uri) for every local-file track — used to flag files that have moved.
+/// Live Media rows are local files too, so they get the same relink care.
 pub fn local_track_uris(conn: &Connection) -> AppResult<Vec<(i64, String)>> {
-    let mut stmt = conn.prepare("SELECT id, uri FROM tracks WHERE source_kind = 'local'")?;
+    let mut stmt =
+        conn.prepare("SELECT id, uri FROM tracks WHERE source_kind IN ('local', 'live')")?;
     let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
     let mut out = Vec::new();
     for row in rows {
@@ -775,6 +802,37 @@ mod tests {
         }
     }
 
+    /// Live Media rows never surface in the aggregated library, while the Live
+    /// view sees every local file under its folder whatever kind it carries —
+    /// and the v7 migration moves files already under the folder out of the
+    /// library rather than leaving them mixed in.
+    #[test]
+    fn live_media_rows_stay_out_of_the_library_and_migration_retags_them() {
+        let conn = mem_db();
+        let dir = "/Users/me/Live";
+        let mut live = new_track("Aired", "A", &format!("{dir}/a.mp3"));
+        live.source_kind = "live".into();
+        insert_track(&conn, &live, 0).unwrap();
+        insert_track(&conn, &new_track("Everyday", "A", "/Users/me/Music/b.mp3"), 0).unwrap();
+        // Imported as a plain library file *before* Live Media existed.
+        insert_track(&conn, &new_track("Legacy", "A", &format!("{dir}/c.mp3")), 0).unwrap();
+
+        let names = |ts: Vec<Track>| ts.into_iter().map(|t| t.title.unwrap()).collect::<Vec<_>>();
+        assert_eq!(
+            names(list_tracks(&conn, None, None, None, 100, 0).unwrap()),
+            vec!["Everyday", "Legacy"],
+            "the library shows everything except 'live' rows"
+        );
+        assert_eq!(names(list_tracks_under(&conn, dir).unwrap()), vec!["Aired", "Legacy"]);
+
+        // Re-run the v7 step with a Live folder configured: Legacy leaves the library.
+        set_setting(&conn, "live.media_dir", dir).unwrap();
+        conn.pragma_update(None, "user_version", 6).unwrap();
+        migrate(&conn).unwrap();
+        assert_eq!(names(list_tracks(&conn, None, None, None, 100, 0).unwrap()), vec!["Everyday"]);
+        assert_eq!(names(list_tracks_under(&conn, dir).unwrap()), vec!["Aired", "Legacy"]);
+    }
+
     /// The Live Media list is exactly the OWNED files under the chosen folder:
     /// a sibling folder sharing the prefix (`Music2` vs `Music`) must not leak
     /// in, LIKE wildcards in the folder name must not widen the match, and a
@@ -810,7 +868,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 6);
+        assert_eq!(version, 7);
         // FTS5 table exists and is queryable
         let count: i64 = conn
             .query_row("SELECT count(*) FROM tracks_fts", [], |r| r.get(0))
