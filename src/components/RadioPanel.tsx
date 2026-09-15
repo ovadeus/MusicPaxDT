@@ -38,6 +38,9 @@ export default function RadioPanel({
   const [editing, setEditing] = useState<RadioStation | null>(null);
   const [editName, setEditName] = useState("");
   const [editThumb, setEditThumb] = useState("");
+  const [editUrl, setEditUrl] = useState("");
+  // A changed link is resolved (checked, codec/bitrate refreshed) before save.
+  const [savingEdit, setSavingEdit] = useState(false);
   const debounce = useRef<number | undefined>(undefined);
 
   // Load persisted favorites once.
@@ -96,6 +99,7 @@ export default function RadioPanel({
     setEditing(s);
     setEditName(s.name);
     setEditThumb(s.favicon ?? "");
+    setEditUrl(s.url);
   };
 
   const chooseImage = async () => {
@@ -110,18 +114,41 @@ export default function RadioPanel({
     }
   };
 
-  const saveEdit = () => {
-    if (!editing) return;
+  const saveEdit = async () => {
+    if (!editing || savingEdit) return;
     const name = editName.trim() || editing.name;
     const favicon = editThumb.trim() || null;
-    // Edit the favorite (identity = url); auto-favorite if it wasn't saved yet.
-    const exists = favUrls.has(editing.url);
-    const next = exists
-      ? favorites.map((f) => (f.url === editing.url ? { ...f, name, favicon } : f))
-      : [...favorites, { ...editing, name, favicon }];
-    persist(next);
-    setEditing(null);
-    onInfo(`Saved “${name}”`);
+    const url = editUrl.trim() || editing.url;
+    const urlChanged = url !== editing.url;
+    if (urlChanged && favUrls.has(url)) {
+      onError("That stream link is already one of your Favorites.");
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      let updated: RadioStation = { ...editing, name, favicon };
+      if (urlChanged) {
+        // A new link has to actually resolve before it replaces a working one.
+        // The resolver also follows .pls/.m3u links to the stream itself and
+        // refreshes codec/bitrate for the new source.
+        const resolved = await ipc.resolveRadioStream(url);
+        updated = { ...updated, url: resolved.url, codec: resolved.codec, bitrate: resolved.bitrate };
+      }
+      // Edit the favorite (identity = the OLD url); auto-favorite if it wasn't saved yet.
+      const exists = favUrls.has(editing.url);
+      const next = exists
+        ? favorites.map((f) => (f.url === editing.url ? updated : f))
+        : [...favorites, updated];
+      persist(next);
+      setEditing(null);
+      onInfo(`Saved “${name}”`);
+      // If this station is on right now, switch to the new link straight away.
+      if (urlChanged && nowPlayingUrl === editing.url) onPlay(updated);
+    } catch (e) {
+      onError(`${e}`);
+    } finally {
+      setSavingEdit(false);
+    }
   };
 
   const add = async (s: RadioStation) => {
@@ -307,7 +334,18 @@ export default function RadioPanel({
                 autoFocus
                 value={editName}
                 onChange={(e) => setEditName(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && saveEdit()}
+                onKeyDown={(e) => e.key === "Enter" && void saveEdit()}
+              />
+            </label>
+
+            <label className="edit-field">
+              <span>Stream link</span>
+              <input
+                value={editUrl}
+                spellCheck={false}
+                placeholder="https://…/stream  (a direct MP3/AAC stream, or a .pls / .m3u link)"
+                onChange={(e) => setEditUrl(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && void saveEdit()}
               />
             </label>
 
@@ -339,12 +377,13 @@ export default function RadioPanel({
             </div>
 
             <div className="edit-actions">
-              <button className="import-button" onClick={saveEdit}>
-                Save
+              <button className="import-button" onClick={() => void saveEdit()} disabled={savingEdit}>
+                {savingEdit ? "Checking link…" : "Save"}
               </button>
             </div>
             <p className="settings-hint">
-              Saving keeps this station in Favorites with your name and thumbnail.
+              Saving keeps this station in Favorites with your name, thumbnail and stream
+              link. A changed link is checked before it replaces the old one.
             </p>
           </div>
         </div>
