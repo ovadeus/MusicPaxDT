@@ -2022,6 +2022,7 @@ export default function App() {
           onApplied={(n) => {
             showStatus(`Applied ${n} change${n === 1 ? "" : "s"}`);
             refreshTracks();
+            void refreshLiveMedia();
           }}
           onError={showStatus}
         />
@@ -2141,6 +2142,7 @@ export default function App() {
               n > 0 ? `Applied ${n} track update(s)` : "No changes applied",
             );
             refreshTracks();
+            void refreshLiveMedia();
           }}
         />
       )}
@@ -2154,6 +2156,9 @@ export default function App() {
           onSaved={(updated) => {
             showStatus(`Updated “${updated.title ?? "track"}”`);
             refreshTracks();
+            // The Live view keeps its own list; without this an edit saved
+            // to the file and the database still showed the old row.
+            setLiveTracks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
             // keep the docked stream label fresh if we just edited it
             setStream((cur) => (cur && cur.id === updated.id ? updated : cur));
             setNow((cur) =>
@@ -2173,6 +2178,7 @@ export default function App() {
             }
             refreshPlaylists();
             refreshTracks();
+            setLiveTracks((prev) => prev.filter((t) => t.id !== removed.id));
           }}
         />
       )}
