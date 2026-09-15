@@ -1,6 +1,8 @@
 import { useEffect, useRef } from "react";
 import type { Track } from "../lib/types";
+import * as ipc from "../lib/ipc";
 import * as meter from "../lib/streamMeter";
+import { isPlaylistLink } from "../lib/radioLinks";
 
 interface Props {
   track: Track;
@@ -37,13 +39,28 @@ export default function RadioPlayer({
     let cancelled = false;
 
     (async () => {
-      const allowed = await meter.corsAllowed(track.uri);
+      // A .pls/.m3u link is a playlist file, not a stream — <audio> can't
+      // play it and fails silently. Unwrap it to the stream it points at.
+      let src = track.uri;
+      if (isPlaylistLink(src)) {
+        try {
+          src = (await ipc.resolveRadioStream(src)).url;
+        } catch (e) {
+          if (!cancelled) {
+            onPlayingChange(false);
+            onError(`Could not open “${track.title ?? "station"}”: ${e}`);
+          }
+          return;
+        }
+        if (cancelled || !audioRef.current) return;
+      }
+      const allowed = await meter.corsAllowed(src);
       if (cancelled || !audioRef.current) return;
       if (allowed) {
         audio.crossOrigin = "anonymous";
         meter.connect(audio);
       }
-      audio.src = track.uri;
+      audio.src = src;
       audio.load();
       if (playingRef.current) audio.play().catch(() => onPlayingChange(false));
     })();
@@ -73,7 +90,11 @@ export default function RadioPlayer({
       hidden
       onPlaying={() => onPlayingChange(true)}
       onPause={() => onPlayingChange(false)}
-      onError={() => onError(`Could not play “${track.title ?? "station"}” — the stream may be offline.`)}
+      onError={() =>
+        onError(
+          `Could not play “${track.title ?? "station"}” — the stream may be offline, or its link may point at a page rather than a stream (edit the station's stream link).`,
+        )
+      }
     />
   );
 }

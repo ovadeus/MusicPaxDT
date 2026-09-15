@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ImagePlus, Link2, Pencil, Play, Plus, Radio as RadioIcon, Star, X } from "lucide-react";
 import * as ipc from "../lib/ipc";
+import { isPlaylistLink } from "../lib/radioLinks";
 import type { RadioStation } from "../lib/types";
 
 interface Props {
@@ -153,7 +154,11 @@ export default function RadioPanel({
 
   const add = async (s: RadioStation) => {
     try {
-      await ipc.importRadioStation(s);
+      // Store the stream itself in the library, not a .pls/.m3u pointer to it.
+      const station = isPlaylistLink(s.url)
+        ? { ...s, url: (await ipc.resolveRadioStream(s.url)).url }
+        : s;
+      await ipc.importRadioStation(station);
       onAdded(s.name);
     } catch (e) {
       onError(`${e}`);
