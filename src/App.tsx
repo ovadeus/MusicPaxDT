@@ -962,26 +962,59 @@ export default function App() {
     if (import.meta.env.DEV) return;
     let cancelled = false;
     let staged = false;
-    const look = () => {
+    const look = async () => {
       if (staged) return;
-      ipc
-        .stageUpdate()
-        .then((u) => {
-          if (cancelled || !u) return;
-          staged = true;
-          setUpdateReady(u);
-        })
-        // Offline, or no manifest published yet: quietly try again later.
-        .catch(() => {});
+      let found: ipc.AvailableUpdate | null;
+      try {
+        found = await ipc.findUpdate();
+      } catch {
+        return; // offline, or no manifest published yet: quietly try later
+      }
+      if (!found || cancelled) return;
+      try {
+        await found.install();
+      } catch (e) {
+        // Unlike a missing manifest, a failed download or install won't fix
+        // itself — say so, rather than leaving a half-done update invisible.
+        if (!cancelled) showStatus(`Update to ${found.version} failed: ${e}`);
+        return;
+      }
+      if (cancelled) return;
+      staged = true;
+      setUpdateReady({ version: found.version, notes: found.notes });
+      // The card can be missed (another app in front, hours in the mini
+      // player); a status line marks the moment so the version change is
+      // never a surprise at the next launch.
+      showStatus(`MUSICPAX ${found.version} is ready — Relaunch to update whenever convenient.`);
     };
-    const first = window.setTimeout(look, 15_000);
-    const every = window.setInterval(look, 6 * 60 * 60 * 1000);
+    const first = window.setTimeout(() => void look(), 15_000);
+    const every = window.setInterval(() => void look(), 6 * 60 * 60 * 1000);
     return () => {
       cancelled = true;
       window.clearTimeout(first);
       window.clearInterval(every);
     };
-  }, []);
+  }, [showStatus]);
+  // A quiet "Updated to x.y.z" the first time a new version runs. An update
+  // can install unseen — in the background, or while the window was hidden —
+  // and then simply *be* the next launch; this keeps that from being a
+  // surprise. Nothing on a first-ever launch.
+  useEffect(() => {
+    ipc
+      .appVersion()
+      .then((v) => {
+        let prev: string | null = null;
+        try {
+          prev = localStorage.getItem("musicpax.lastVersion");
+          localStorage.setItem("musicpax.lastVersion", v);
+        } catch {
+          return;
+        }
+        if (prev && prev !== v) showStatus(`Updated to MUSICPAX ${v}.`);
+      })
+      .catch(() => {});
+  }, [showStatus]);
+
   const relaunchForUpdate = () => {
     if (onAir) {
       showStatus("Finish your broadcast first — the update installs when you relaunch.");
@@ -1941,6 +1974,8 @@ export default function App() {
           micro={micro}
           onGrow={() => resizeWindow(micro ? "mini" : "full")}
           onShrink={micro ? undefined : () => resizeWindow("micro")}
+          updateVersion={updateReady?.version ?? null}
+          onRelaunch={relaunchForUpdate}
           canStep={!lineIn && (stream != null || now != null)}
           coverRef={miniCoverRef}
         />

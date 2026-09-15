@@ -6,6 +6,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { getVersion } from "@tauri-apps/api/app";
 import type {
   AudioDevice,
   EngineStatus,
@@ -678,31 +679,46 @@ export interface StagedUpdate {
   notes: string | null;
 }
 
-/// Look for a newer release and, if there is one, download it, verify its
-/// signature and stage it — all in the background. Resolves with the staged
-/// version, or null when this build is current. The running app is untouched
-/// until relaunchApp(), which is what makes "Relaunch to update" instant.
-export async function stageUpdate(
-  onProgress?: (fraction: number) => void,
-): Promise<StagedUpdate | null> {
+export interface AvailableUpdate extends StagedUpdate {
+  /// Download, verify and stage it. The running app is untouched until
+  /// relaunchApp(), which is what makes "Relaunch to update" instant.
+  install: (onProgress?: (fraction: number) => void) => Promise<void>;
+}
+
+/// Look for a newer release. Resolves null when this build is current. The
+/// two phases are separate on purpose: a failed *check* (offline, no manifest
+/// yet) is routine and worth no more than a retry later, but a failed
+/// *install* won't fix itself and must be shown — swallowing it left an
+/// update installed on disk with no card ever appearing.
+export async function findUpdate(): Promise<AvailableUpdate | null> {
   const update = await checkForUpdate();
   if (!update) return null;
-  let total = 0;
-  let received = 0;
-  await update.downloadAndInstall((ev) => {
-    if (ev.event === "Started") {
-      total = ev.data.contentLength ?? 0;
-    } else if (ev.event === "Progress") {
-      received += ev.data.chunkLength;
-      if (total > 0) onProgress?.(received / total);
-    }
-  });
-  return { version: update.version, notes: update.body ?? null };
+  return {
+    version: update.version,
+    notes: update.body ?? null,
+    install: async (onProgress) => {
+      let total = 0;
+      let received = 0;
+      await update.downloadAndInstall((ev) => {
+        if (ev.event === "Started") {
+          total = ev.data.contentLength ?? 0;
+        } else if (ev.event === "Progress") {
+          received += ev.data.chunkLength;
+          if (total > 0) onProgress?.(received / total);
+        }
+      });
+    },
+  };
 }
 
 /// Quit and start the (already staged) new version.
 export function relaunchApp(): Promise<void> {
   return relaunch();
+}
+
+/// The running app's version, from the bundle (not the build-time manifest).
+export function appVersion(): Promise<string> {
+  return getVersion();
 }
 
 /// Check a YouTube Data API key (1 quota unit) before saving it. Resolves with

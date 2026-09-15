@@ -5,6 +5,7 @@ import {
   Maximize2,
   Pause,
   Play,
+  RefreshCw,
   SkipBack,
   SkipForward,
   Volume1,
@@ -34,6 +35,12 @@ interface Props {
   onShrink?: () => void;
   /// Micro: the smallest size — title, transport and the two sliders only.
   micro?: boolean;
+  /// A staged update's version, when one is ready. The full window shows a
+  /// card for this; the small sizes have no room for it, and people leave
+  /// the app in them for hours — exactly when the periodic check fires — so
+  /// they carry their own compact affordance instead of hiding the news.
+  updateVersion?: string | null;
+  onRelaunch?: () => void;
   canStep: boolean;
   /// The cover element, measured by App so a live video can fill the cover slot.
   coverRef?: RefObject<HTMLDivElement | null>;
@@ -56,8 +63,14 @@ export default function MiniPlayer(props: Props) {
     onGrow,
     onShrink,
     micro,
+    updateVersion,
+    onRelaunch,
     canStep,
   } = props;
+
+  const updateTitle = updateVersion
+    ? `MUSICPAX ${updateVersion} is ready — relaunch to update`
+    : undefined;
 
   const [dragMs, setDragMs] = useState<number | null>(null);
   const shownMs = dragMs ?? positionMs;
@@ -110,9 +123,17 @@ export default function MiniPlayer(props: Props) {
     return (
       <div className="mini-player micro">
         <div className="micro-top">
-          <div className="mini-title" title={track?.title ?? ""}>
+          <div
+            className={`mini-title${updateVersion && onRelaunch ? " with-update" : ""}`}
+            title={track?.title ?? ""}
+          >
             {track?.title ?? "Nothing playing"}
           </div>
+          {updateVersion && onRelaunch && (
+            <button className="mini-update micro" title={updateTitle} onClick={onRelaunch}>
+              <RefreshCw size={13} />
+            </button>
+          )}
           <button className="mini-expand" title="Back to the mini player" onClick={onGrow}>
             <ChevronUp size={17} />
           </button>
@@ -141,7 +162,14 @@ export default function MiniPlayer(props: Props) {
   return (
     <div className="mini-player">
       <div className="mini-titlebar">
-        <span className="mini-brand">MINIPLAY</span>
+        {/* The pill takes the brand's place: at 360px there isn't room for
+            both, and "Relaunch to update" is the more useful headline. */}
+        {!(updateVersion && onRelaunch) && <span className="mini-brand">MINIPLAY</span>}
+        {updateVersion && onRelaunch && (
+          <button className="mini-update" title={updateTitle} onClick={onRelaunch}>
+            <RefreshCw size={12} /> Relaunch to update
+          </button>
+        )}
         {onShrink && (
           <button className="mini-expand" title="Shrink to the micro player" onClick={onShrink}>
             <ChevronDown size={17} />
