@@ -661,6 +661,123 @@ pub fn stop_screen_audio(state: State<'_, AppState>) {
     *lock_unpoisoned(&state.screen_audio) = None;
 }
 
+// ----- Talk-over mic ----------------------------------------------------------
+
+/// Persisted mic settings (settings table, `mic.*`).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MicConfig {
+    /// Input device name; None = the system default input.
+    pub device: Option<String>,
+    /// "open" or "ptt" (push-to-talk).
+    pub mode: String,
+    pub gain_db: f32,
+    /// How far the music drops while talking (negative dB).
+    pub duck_db: f32,
+    /// RMS level (dBFS) above which the mic counts as "talking" (open-mic mode).
+    pub threshold_db: f32,
+    /// Also send the mic to the speakers. Off by default: with an external
+    /// desk the DJ already hears themselves, and a bare mic in the room feeds back.
+    pub monitor: bool,
+}
+
+fn load_mic_config(conn: &rusqlite::Connection) -> AppResult<MicConfig> {
+    let get = |k: &str| db::get_setting(conn, k);
+    let num = |k: &str, d: f32| -> AppResult<f32> {
+        Ok(get(k)?.and_then(|v| v.parse().ok()).unwrap_or(d))
+    };
+    Ok(MicConfig {
+        device: get("mic.device")?.filter(|d| !d.trim().is_empty()),
+        mode: get("mic.mode")?.unwrap_or_else(|| "ptt".into()),
+        gain_db: num("mic.gain_db", 0.0)?,
+        duck_db: num("mic.duck_db", -12.0)?,
+        threshold_db: num("mic.threshold_db", -42.0)?,
+        monitor: get("mic.monitor")?.as_deref() == Some("1"),
+    })
+}
+
+fn apply_mic_config(engine: &crate::audio::engine::EngineHandle, c: &MicConfig) {
+    engine.set_mic_params(
+        crate::audio::mic::mode_from_name(&c.mode),
+        c.gain_db,
+        c.duck_db,
+        c.threshold_db,
+        c.monitor,
+    );
+}
+
+#[tauri::command]
+pub fn get_mic_config(state: State<'_, AppState>) -> AppResult<MicConfig> {
+    let conn = lock_unpoisoned(&state.db);
+    load_mic_config(&conn)
+}
+
+/// Save mic settings and apply them to the engine immediately.
+#[tauri::command]
+pub fn set_mic(config: MicConfig, state: State<'_, AppState>) -> AppResult<MicConfig> {
+    {
+        let conn = lock_unpoisoned(&state.db);
+        db::set_setting(&conn, "mic.device", config.device.as_deref().unwrap_or(""))?;
+        db::set_setting(&conn, "mic.mode", &config.mode)?;
+        db::set_setting(&conn, "mic.gain_db", &config.gain_db.to_string())?;
+        db::set_setting(&conn, "mic.duck_db", &config.duck_db.to_string())?;
+        db::set_setting(&conn, "mic.threshold_db", &config.threshold_db.to_string())?;
+        db::set_setting(&conn, "mic.monitor", if config.monitor { "1" } else { "0" })?;
+    }
+    apply_mic_config(&state.engine, &config);
+    Ok(config)
+}
+
+/// Start the talk-over mic on `input` (None = default input). Applies the
+/// saved settings first so gain, ducking and mode are right from the first
+/// word, whether or not the panel that edits them has been opened.
+#[tauri::command]
+pub async fn mic_start(
+    input: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<crate::audio::mic::MicStatus> {
+    let engine = state.engine.clone();
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let config = {
+            let conn = lock_unpoisoned(&db);
+            let mut c = load_mic_config(&conn)?;
+            if input.is_some() {
+                c.device = input.clone().filter(|d| !d.trim().is_empty());
+                db::set_setting(&conn, "mic.device", c.device.as_deref().unwrap_or(""))?;
+            }
+            c
+        };
+        apply_mic_config(&engine, &config);
+        engine.mic_start(config.device.clone())?;
+        Ok(engine.mic_status())
+    })
+    .await
+    .map_err(|e| AppError::Audio(format!("mic task failed: {e}")))?
+}
+
+#[tauri::command]
+pub async fn mic_stop(state: State<'_, AppState>) -> AppResult<crate::audio::mic::MicStatus> {
+    let engine = state.engine.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        engine.mic_stop()?;
+        Ok(engine.mic_status())
+    })
+    .await
+    .map_err(|e| AppError::Audio(format!("mic task failed: {e}")))?
+}
+
+/// Push-to-talk hold / release.
+#[tauri::command]
+pub fn mic_hold(open: bool, state: State<'_, AppState>) {
+    state.engine.mic_hold(open);
+}
+
+#[tauri::command]
+pub fn mic_status(state: State<'_, AppState>) -> crate::audio::mic::MicStatus {
+    state.engine.mic_status()
+}
+
 /// Geometry for one of the three player sizes: `(width, height, min width,
 /// min height, floating)`. A floating size is its own minimum so the window
 /// can shrink below the full-app floor; only "full" is resizable and normally

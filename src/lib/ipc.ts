@@ -789,6 +789,62 @@ export function goLiveStatus(): Promise<BroadcastStatus> {
   return invoke<BroadcastStatus>("go_live_status");
 }
 
+// ----- Talk-over mic -----------------------------------------------------------
+
+export type MicMode = "open" | "ptt";
+
+export interface MicConfig {
+  /// Input device name; null = the system default input.
+  device: string | null;
+  mode: MicMode;
+  gainDb: number;
+  /// How far the music drops while talking (negative dB).
+  duckDb: number;
+  /// RMS dBFS above which an open mic counts as "talking".
+  thresholdDb: number;
+  /// Also hear the mic in the speakers (off with an external desk).
+  monitor: boolean;
+}
+
+export interface MicStatus {
+  on: boolean;
+  mode: MicMode;
+  /// Open mic, or push-to-talk currently held.
+  open: boolean;
+  /// Ducking engaged: a voice is present (or push-to-talk is held).
+  talking: boolean;
+  /// Post-gain peak, linear 0..1.
+  level: number;
+  inputDevice: string | null;
+  inputRate: number | null;
+}
+
+export function getMicConfig(): Promise<MicConfig> {
+  return invoke<MicConfig>("get_mic_config");
+}
+
+/// Save and apply mic settings (sliders are live — no restart).
+export function setMic(config: MicConfig): Promise<MicConfig> {
+  return invoke<MicConfig>("set_mic", { config });
+}
+
+export function micStart(input: string | null): Promise<MicStatus> {
+  return invoke<MicStatus>("mic_start", { input });
+}
+
+export function micStop(): Promise<MicStatus> {
+  return invoke<MicStatus>("mic_stop");
+}
+
+/// Push-to-talk hold / release.
+export function micHold(open: boolean): Promise<void> {
+  return invoke<void>("mic_hold", { open });
+}
+
+export function micStatus(): Promise<MicStatus> {
+  return invoke<MicStatus>("mic_status");
+}
+
 export function onBroadcastState(
   cb: (status: BroadcastStatus) => void,
 ): Promise<UnlistenFn> {

@@ -5338,3 +5338,147 @@ input[type="range"] {
 .micro-top .mini-title.with-update {
   max-width: calc(100% - 72px);
 }
+
+/* ---------- Go Live: talk-over mic ---------- */
+.golive-mic {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
+.golive-mic.on {
+  border-color: rgba(224, 38, 90, 0.45);
+}
+
+.golive-mic-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: var(--text-dim);
+}
+
+.golive-mic-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 7px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.golive-mic-toggle:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.golive-mic-toggle.on {
+  background: #e0265a;
+  border-color: #e0265a;
+  color: #fff;
+}
+
+.golive-mic-toggle:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.golive-mic-select {
+  background-color: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--text);
+  padding: 6px 26px 6px 10px;
+  font-size: 12.5px;
+  font-family: inherit;
+  max-width: 220px;
+}
+
+.golive-mic-select:disabled {
+  opacity: 0.6;
+}
+
+/* Push-to-talk button: obviously a "hold" control, lit while held. */
+.golive-ptt {
+  padding: 6px 14px;
+  border-radius: 7px;
+  background: var(--bg-raised);
+  border: 1px dashed var(--accent);
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.golive-ptt.held {
+  background: #e0265a;
+  border: 1px solid #e0265a;
+  color: #fff;
+}
+
+.golive-mic-meter {
+  flex: 1 1 120px;
+  min-width: 80px;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.golive-mic-meter-fill {
+  height: 100%;
+  background: linear-gradient(to right, #3fbf6a 0%, #3fbf6a 70%, #e8a33d 85%, #e0265a 100%);
+  transition: width 60ms linear;
+}
+
+.golive-mic-live {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #e0265a;
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  animation: golive-pulse 1.4s ease-in-out infinite;
+}
+
+.golive-mic-params {
+  gap: 18px;
+}
+
+.golive-mic-param {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.golive-mic-param input[type="range"] {
+  width: 120px;
+}
+
+.golive-mic-param em {
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  min-width: 46px;
+}
+
+.golive-check.golive-mic-monitor {
+  flex: 0 0 auto;
+  font-size: 12px;
+}

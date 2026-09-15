@@ -101,4 +101,10 @@ commands.allow = [
     "go_live_start",
     "go_live_stop",
     "go_live_status",
+    "get_mic_config",
+    "set_mic",
+    "mic_start",
+    "mic_stop",
+    "mic_hold",
+    "mic_status",
 ]

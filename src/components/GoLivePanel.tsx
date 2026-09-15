@@ -1,7 +1,27 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronUp, FolderOpen, RadioTower, RefreshCw } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  FolderOpen,
+  Mic,
+  MicOff,
+  RadioTower,
+  RefreshCw,
+} from "lucide-react";
 import * as ipc from "../lib/ipc";
-import type { BroadcastConfig, BroadcastStatus } from "../lib/ipc";
+import type { BroadcastConfig, BroadcastStatus, MicConfig, MicMode, MicStatus } from "../lib/ipc";
+import type { AudioDevice } from "../lib/types";
+
+/// Mic meter: peak → dBFS → 0..100 over a 60 dB range.
+function levelPercent(level: number): number {
+  if (level <= 0) return 0;
+  const db = 20 * Math.log10(level);
+  return Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
+}
+
+function fmtDb(db: number): string {
+  return `${db > 0 ? "+" : ""}${db} dB`;
+}
 
 interface Props {
   onClose: () => void;
@@ -62,6 +82,71 @@ export default function GoLivePanel({
   });
   const [busy, setBusy] = useState(false);
   const [advanced, setAdvanced] = useState(false);
+
+  // ----- talk-over mic -----------------------------------------------------
+  const [micCfg, setMicCfg] = useState<MicConfig | null>(null);
+  const [micStat, setMicStat] = useState<MicStatus | null>(null);
+  const [inputs, setInputs] = useState<AudioDevice[]>([]);
+  const [micBusy, setMicBusy] = useState(false);
+  const micOn = micStat?.on ?? false;
+  const ptt = (micCfg?.mode ?? "ptt") === "ptt";
+
+  useEffect(() => {
+    ipc.getMicConfig().then(setMicCfg).catch((e) => onError(`${e}`));
+    ipc.micStatus().then(setMicStat).catch(() => {});
+    ipc.getAudioInputDevices().then(setInputs).catch(() => {});
+  }, [onError]);
+
+  // While the mic runs, poll for the meter and the "talking" state. 10 Hz is
+  // plenty for a level bar and costs nothing (a few atomics).
+  useEffect(() => {
+    if (!micOn) return;
+    const id = window.setInterval(() => {
+      ipc.micStatus().then(setMicStat).catch(() => {});
+    }, 100);
+    return () => window.clearInterval(id);
+  }, [micOn]);
+
+  // Push-to-talk on the keyboard: hold Option (⌥). A modifier can't type into
+  // a field, so it never fights with editing, and it's easy to hold.
+  useEffect(() => {
+    if (!micOn || !ptt) return;
+    const down = (e: KeyboardEvent) => {
+      if (e.key === "Alt" && !e.repeat) void ipc.micHold(true);
+    };
+    const up = (e: KeyboardEvent) => {
+      if (e.key === "Alt") void ipc.micHold(false);
+    };
+    const release = () => void ipc.micHold(false);
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    window.addEventListener("blur", release);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+      window.removeEventListener("blur", release);
+      release();
+    };
+  }, [micOn, ptt]);
+
+  const updateMic = (patch: Partial<MicConfig>) => {
+    if (!micCfg) return;
+    const next = { ...micCfg, ...patch };
+    setMicCfg(next);
+    ipc.setMic(next).catch((e) => onError(`${e}`));
+  };
+
+  const toggleMic = async () => {
+    if (!micCfg) return;
+    setMicBusy(true);
+    try {
+      setMicStat(micOn ? await ipc.micStop() : await ipc.micStart(micCfg.device));
+    } catch (e) {
+      onError(`${e}`);
+    } finally {
+      setMicBusy(false);
+    }
+  };
 
   useEffect(() => {
     ipc
@@ -274,6 +359,102 @@ export default function GoLivePanel({
               <strong>Live Media</strong> airs only files on this computer — tracks you own
               or are licensed to broadcast. Playlists built from YouTube and other streaming
               sources can't go on air: their terms don't allow re-broadcasting.
+            </p>
+          </div>
+
+          {/* Talk-over mic: mixed over the music for the broadcast, with the
+              music ducked while the DJ talks. */}
+          <div className={`golive-mic${micOn ? " on" : ""}`}>
+            <div className="golive-mic-row">
+              <button
+                className={`golive-mic-toggle${micOn ? " on" : ""}`}
+                onClick={toggleMic}
+                disabled={micBusy || !micCfg}
+                title={micOn ? "Turn the mic off" : "Turn the mic on"}
+              >
+                {micOn ? <Mic size={15} /> : <MicOff size={15} />}
+                {micOn ? "Mic on" : "Mic off"}
+              </button>
+              <select
+                className="golive-mic-select"
+                value={micCfg?.device ?? ""}
+                disabled={micOn}
+                title={micOn ? "Turn the mic off to change the input" : "Mic input"}
+                onChange={(e) => updateMic({ device: e.target.value || null })}
+              >
+                <option value="">Default input</option>
+                {inputs.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                className="golive-mic-select"
+                value={micCfg?.mode ?? "ptt"}
+                onChange={(e) => updateMic({ mode: e.target.value as MicMode })}
+              >
+                <option value="ptt">Push to talk — hold ⌥</option>
+                <option value="open">Open mic</option>
+              </select>
+              {micOn && ptt && (
+                <button
+                  className={`golive-ptt${micStat?.open ? " held" : ""}`}
+                  onMouseDown={() => void ipc.micHold(true)}
+                  onMouseUp={() => void ipc.micHold(false)}
+                  onMouseLeave={() => void ipc.micHold(false)}
+                  title="Hold to talk (or hold the ⌥ key)"
+                >
+                  Hold to talk
+                </button>
+              )}
+              <div className="golive-mic-meter" title="Mic level">
+                <div
+                  className="golive-mic-meter-fill"
+                  style={{ width: `${micOn ? levelPercent(micStat?.level ?? 0) : 0}%` }}
+                />
+              </div>
+              {micOn && micStat?.talking && <span className="golive-mic-live">ON MIC</span>}
+            </div>
+            <div className="golive-mic-row golive-mic-params">
+              <label className="golive-mic-param">
+                <span>Mic gain</span>
+                <input
+                  type="range"
+                  min={-20}
+                  max={20}
+                  step={1}
+                  value={micCfg?.gainDb ?? 0}
+                  onChange={(e) => updateMic({ gainDb: Number(e.target.value) })}
+                />
+                <em>{fmtDb(micCfg?.gainDb ?? 0)}</em>
+              </label>
+              <label className="golive-mic-param">
+                <span>Duck music</span>
+                <input
+                  type="range"
+                  min={-30}
+                  max={0}
+                  step={1}
+                  value={micCfg?.duckDb ?? -12}
+                  onChange={(e) => updateMic({ duckDb: Number(e.target.value) })}
+                />
+                <em>{fmtDb(micCfg?.duckDb ?? -12)}</em>
+              </label>
+              <label className="golive-check golive-mic-monitor">
+                <input
+                  type="checkbox"
+                  checked={micCfg?.monitor ?? false}
+                  onChange={(e) => updateMic({ monitor: e.target.checked })}
+                />
+                Hear mic in speakers
+              </label>
+            </div>
+            <p className="golive-media-note">
+              Your mic is mixed over the music for the broadcast; while you talk the
+              music ducks by the amount above and comes back when you stop. Using a
+              RØDECaster or other desk? Pick it as the input and leave “hear mic in
+              speakers” off — you're already monitoring through it.
             </p>
           </div>
 

@@ -89,6 +89,18 @@ thiserror.
       Deliberately a hard line, not per-track airability: streaming sources' terms
       forbid re-broadcasting, so aggregated playlists are never in the live view.
       Go Live is an inline accordion under the header (not a modal).
+      Talk-over mic (2026-09-15, audio/mic.rs): any input device captured →
+      relay thread (resample to out rate, gain, level, VoiceGate) → pushed into
+      the CURRENT output stream's mic ring (Shared::mic_prod; callback owns the
+      Consumer — lock-free, mirror of the bcast tee) → mixed over the music in
+      the callback with DuckEnvelope (30 ms attack / 700 ms release). Modes:
+      push-to-talk (hold ⌥ or the button; ducks on hold) / open mic (ducks on
+      voice). Monitor-to-speakers off by default (external desks). While the
+      mic is on and nothing plays, AudioHost keeps a silent "keepalive" output
+      stream so the voice still airs between tracks; dropped when a session or
+      line-in builds its own stream. Settings mic.* ; commands get_mic_config/
+      set_mic/mic_start/mic_stop/mic_hold/mic_status. Line-in + playback remain
+      exclusive; the mic is the only input summed with playback.
 - M5b AI playlist builder ✅ done (2026-09-10) — third top-bar quick-add button
       (YouTube / Spotify / AI) opens BuildPlaylistWithAIModal ("Build Playlist
       With a Text Prompt", track count 1–50, default 25). ai_build_playlist
