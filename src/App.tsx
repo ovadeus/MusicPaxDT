@@ -452,6 +452,10 @@ export default function App() {
           const next = prev.map((x) => (x.id === t.id ? { ...x, rating: fav ? 0 : 1 } : x));
           return view.kind === "favorites" && fav ? next.filter((x) => x.id !== t.id) : next;
         });
+        // The Live view keeps its own list; the heart has to light up there too.
+        setLiveTracks((prev) =>
+          prev.map((x) => (x.id === t.id ? { ...x, rating: fav ? 0 : 1 } : x)),
+        );
       } catch (e) {
         showStatus(`${e}`);
       }
@@ -702,6 +706,11 @@ export default function App() {
           setSource((s) => (s === "live" ? s : "library"));
           setPositionMs(0);
           setTracks((prev) =>
+            prev.map((t) =>
+              t.id === track.id ? { ...t, playCount: t.playCount + 1 } : t,
+            ),
+          );
+          setLiveTracks((prev) =>
             prev.map((t) =>
               t.id === track.id ? { ...t, playCount: t.playCount + 1 } : t,
             ),
