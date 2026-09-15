@@ -687,8 +687,9 @@ button svg,
   border-color: var(--accent);
 }
 
-/* Standalone Curator quick-add buttons: brand-tinted icons for the two primary
-   ways to find & add tracks (Search YouTube / Import Spotify Playlist). */
+/* Standalone Curator quick-add buttons: tinted icons for the three primary
+   ways to find & add tracks (Search YouTube / Import Spotify Playlist / Build
+   Playlist with AI). */
 .settings-button.brand-youtube {
   color: #ff0033;
   display: inline-flex;
@@ -699,9 +700,169 @@ button svg,
   display: inline-flex;
   align-items: center;
 }
+.settings-button.brand-ai {
+  color: #a78bfa;
+  display: inline-flex;
+  align-items: center;
+}
 .settings-button.brand-youtube:hover,
-.settings-button.brand-spotify:hover {
+.settings-button.brand-spotify:hover,
+.settings-button.brand-ai:hover {
   border-color: currentColor;
+}
+
+/* Build Playlist with AI: track-count row under the prompt. */
+.aibuild-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.aibuild-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.aibuild-count input {
+  width: 64px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 5px 8px;
+  font-size: 13px;
+  font-family: inherit;
+}
+.aibuild-max {
+  opacity: 0.7;
+}
+.aibuild-provider {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* First-run welcome / onboarding. */
+.welcome-overlay {
+  z-index: 100; /* above every other overlay */
+  align-items: center;
+  padding-top: 0;
+}
+.welcome-panel {
+  max-width: 540px;
+  width: 100%;
+  cursor: default;
+}
+.welcome-hero {
+  text-align: center;
+  padding: 4px 4px 14px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 16px;
+}
+.welcome-hero h2 {
+  margin: 0 0 6px;
+  font-size: 22px;
+}
+.welcome-sub {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.welcome-ai h3 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 6px;
+  font-size: 15px;
+}
+.welcome-ai-lead {
+  margin: 0 0 12px;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.welcome-benefits {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.welcome-benefits li {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text);
+}
+.welcome-benefits li svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--accent);
+}
+.welcome-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.welcome-privacy {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  background: var(--accent-soft);
+  border-radius: 8px;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.welcome-actions {
+  display: flex;
+  justify-content: center;
+}
+.welcome-actions .import-button {
+  width: 100%;
+  padding: 10px 14px;
+  font-size: 14px;
+}
+.welcome-skip {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+  padding: 6px;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.welcome-skip:hover:not(:disabled) {
+  color: var(--text);
+}
+
+/* "Add a key to use AI" notice shown when no provider/key is configured. */
+.ai-locked-note {
+  margin: 4px 0 14px;
+  padding: 12px 14px;
+  background: var(--accent-soft);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.ai-locked-note p {
+  margin: 0 0 8px;
+}
+.ai-locked-note p:last-child {
+  margin-bottom: 0;
+  color: var(--text-dim);
 }
 
 .settings-overlay {
@@ -1232,14 +1393,24 @@ button svg,
   color: var(--text-dim);
 }
 
+/* A button (an <a> opens nothing in the webview), styled back down to a link. */
 .np-bio-link {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   margin-top: 8px;
+  padding: 0;
+  background: none;
+  border: none;
+  font-family: inherit;
   font-size: 12px;
   color: var(--accent);
   text-decoration: none;
+  cursor: pointer;
+}
+
+.np-bio-link:hover {
+  text-decoration: underline;
 }
 
 .np-bio-editbtn {
@@ -1943,20 +2114,87 @@ body.col-resizing {
 }
 
 /* Go Live panel */
-.golive-panel {
-  width: min(560px, 94vw);
+/* Inline accordion under the app header — deliberately not an overlay, so a
+   stray click can't discard connection details mid-broadcast. */
+.golive-bar {
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+  padding: 12px 18px 14px;
+  animation: golive-slide 200ms ease-out;
+  /* The left edge carries the on-air state, readable from across the room. */
+  border-left: 3px solid transparent;
+}
+
+@keyframes golive-slide {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .golive-bar {
+    animation: none;
+  }
+}
+
+.golive-bar.golive-live {
+  border-left-color: #e0265a;
+  background: linear-gradient(to right, rgba(224, 38, 90, 0.07), transparent 320px),
+    var(--bg-raised);
+}
+
+.golive-bar.golive-error,
+.golive-bar.golive-reconnecting {
+  border-left-color: #e8a33d;
+}
+
+.golive-bar-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.golive-bar-head h2 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  font-size: 15px;
+  white-space: nowrap;
+}
+
+.golive-collapse {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  display: inline-flex;
+  padding: 4px;
+  border-radius: 6px;
+}
+
+.golive-collapse:hover {
+  color: var(--text);
+  background: var(--bg-hover);
 }
 
 .golive-status {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin: 12px 0 16px;
-  padding: 10px 14px;
-  border-radius: 10px;
+  gap: 8px;
+  min-width: 0;
+  padding: 5px 12px;
+  border-radius: 999px;
   background: var(--bg);
   border: 1px solid var(--border);
-  font-size: 13.5px;
+  font-size: 12.5px;
 }
 
 .golive-dot {
@@ -1973,16 +2211,18 @@ body.col-resizing {
 }
 
 .golive-elapsed {
-  margin-left: auto;
   font-variant-numeric: tabular-nums;
   color: var(--text-dim);
 }
 
+/* Errors can be long ("failed to lookup address information…") — let it take
+   the room it needs on one line rather than reflowing the whole bar. */
 .golive-msg {
-  margin-left: auto;
   color: var(--text-dim);
   font-size: 12px;
-  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .golive-live .golive-dot {
@@ -2006,8 +2246,12 @@ body.col-resizing {
   gap: 12px;
 }
 
-.golive-row {
+/* One row on a wide window, wrapping sensibly as it narrows. Each field
+   declares how eagerly it grows and the width below which it wraps. */
+.golive-grid {
   display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
   gap: 12px;
 }
 
@@ -2017,15 +2261,24 @@ body.col-resizing {
   gap: 5px;
   font-size: 12px;
   color: var(--text-dim);
+  min-width: 0;
 }
 
-.golive-field.golive-grow {
-  flex: 1;
+.golive-field.golive-host {
+  flex: 2 1 190px;
 }
-
+.golive-field.golive-mount {
+  flex: 1.4 1 150px;
+}
+.golive-field.golive-user,
+.golive-field.golive-pass {
+  flex: 1 1 140px;
+}
 .golive-field.golive-port {
-  width: 120px;
-  flex-shrink: 0;
+  flex: 0 0 88px;
+}
+.golive-field.golive-bitrate {
+  flex: 0 0 116px;
 }
 
 .golive-field input,
@@ -2037,6 +2290,18 @@ body.col-resizing {
   padding: 9px 28px 9px 10px;
   font-size: 13.5px;
   font-family: inherit;
+  /* Inputs carry an intrinsic min-width that would otherwise stop the row
+     from wrapping down to the flex-basis widths set above. */
+  width: 100%;
+  min-width: 0;
+}
+
+.golive-hint {
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  max-width: 100ch;
 }
 
 .golive-field input:focus,
@@ -2071,25 +2336,30 @@ body.col-resizing {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex: 1 1 100%;
   font-size: 12.5px;
   color: var(--text-dim);
 }
 
+/* Last item in the field row, sitting on the inputs' baseline. */
 .golive-actions {
-  margin-top: 4px;
+  flex: 0 0 auto;
+  margin-left: auto;
 }
 
 .golive-btn {
-  width: 100%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   border: none;
-  border-radius: 9px;
-  padding: 13px;
-  font-size: 14.5px;
+  border-radius: 8px;
+  padding: 0 22px;
+  /* Matches the inputs' rendered height so the row bottoms line up. */
+  height: 38px;
+  font-size: 13.5px;
   font-weight: 700;
+  white-space: nowrap;
   cursor: pointer;
 }
 
@@ -3001,18 +3271,23 @@ input[type="range"] {
 }
 
 .mini-titlebar {
+  position: relative;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
+  gap: 4px;
   height: 18px;
 }
 
+/* Absolutely centred so the brand stays put however many buttons sit beside it. */
 .mini-brand {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
   font-size: 10px;
   letter-spacing: 0.18em;
   font-weight: 700;
   color: var(--text-dim);
-  margin: 0 auto;
 }
 
 .mini-expand {
@@ -3129,6 +3404,55 @@ input[type="range"] {
 
 .mini-volume .volume-slider {
   flex: 1;
+}
+
+/* ---------- Micro player (the smallest size: no cover art) ---------- */
+.mini-player.micro {
+  justify-content: center;
+  padding: 10px 16px 12px;
+  gap: 9px;
+}
+
+.micro-top {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 20px;
+}
+
+.micro-top .mini-title {
+  max-width: calc(100% - 44px);
+}
+
+.micro-top .mini-expand {
+  position: absolute;
+  right: 0;
+}
+
+.micro-sliders {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-dim);
+}
+
+/* Seek takes the wider share; both shrink freely (min-width:auto would not). */
+.micro-sliders .seek-slider {
+  flex: 1 1 56%;
+  min-width: 0;
+}
+
+.micro-sliders .volume-slider {
+  flex: 1 1 44%;
+  min-width: 0;
+}
+
+.micro-time {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  margin-top: -4px;
 }
 
 /* Mini player cover↔video toggle (above the rect-positioned video, z 250) */
@@ -3432,6 +3756,99 @@ input[type="range"] {
 .bulk-controls button:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* Bulk playlist actions: New Playlist / Add to (match the neutral controls). */
+.bulk-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--text-dim);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.bulk-action:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+/* Inline "name your new playlist" field, mirroring the sidebar rename input. */
+.bulk-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.bulk-name input {
+  height: 32px;
+  padding: 0 10px;
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+  width: 180px;
+}
+.bulk-create {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  background: var(--accent);
+  color: #0c1016;
+  font-weight: 600;
+  border: none;
+  border-radius: 7px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.bulk-create:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+/* Add-to-playlist popover anchored under its button. */
+.bulk-addwrap {
+  position: relative;
+  display: inline-flex;
+}
+.bulk-addmenu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 30;
+  min-width: 180px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--panel, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.bulk-addmenu button {
+  text-align: left;
+  padding: 7px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bulk-addmenu button:hover:not(:disabled) {
+  background: var(--accent-soft);
 }
 
 /* Left-side checkbox column in list view. */
@@ -4468,4 +4885,600 @@ input[type="range"] {
 
 .sidebar-item.playlist.in-folder {
   padding-left: 28px;
+}
+
+/* ---------- Guided YouTube Data API key setup ---------- */
+.ytkey-panel {
+  width: min(560px, 92vw);
+  max-height: 82vh;
+  overflow-y: auto;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px 22px 18px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+}
+
+.ytkey-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ytkey-head h2 {
+  margin: 0;
+  font-size: 19px;
+}
+
+.ytkey-sub {
+  margin: 3px 0 0;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.ytkey-why {
+  margin: 12px 0 18px;
+  font-size: 13px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+.ytkey-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.ytkey-steps li {
+  display: flex;
+  gap: 12px;
+}
+
+/* Step number, swapped for a tick once the key verifies. */
+.ytkey-num {
+  flex: 0 0 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ytkey-steps li.done .ytkey-num {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #0c1016;
+}
+
+.ytkey-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.ytkey-body strong {
+  font-size: 14px;
+}
+
+.ytkey-body p {
+  margin: 3px 0 8px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  line-height: 1.45;
+}
+
+.ytkey-body em {
+  font-style: normal;
+  color: var(--text);
+}
+
+.ytkey-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: 7px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.ytkey-link:hover {
+  background: var(--accent);
+  color: #0c1016;
+}
+
+.ytkey-input {
+  width: 100%;
+  padding: 9px 11px;
+  border-radius: 7px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+}
+
+.ytkey-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.ytkey-input.ok {
+  border-color: #3fbf6a;
+}
+
+.ytkey-input.error {
+  border-color: var(--danger);
+}
+
+/* Qualified by .ytkey-body so it outranks the step paragraphs above it. */
+.ytkey-body p.ytkey-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 0;
+  font-size: 12.5px;
+}
+
+.ytkey-status.ok {
+  color: #3fbf6a;
+}
+
+.ytkey-status.error {
+  color: var(--danger);
+}
+
+.ytkey-spin {
+  animation: ytkey-spin 1s linear infinite;
+}
+
+@keyframes ytkey-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.ytkey-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.ytkey-skip {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 8px 10px;
+}
+
+.ytkey-skip:hover {
+  color: var(--text);
+}
+
+.ytkey-done {
+  background: var(--accent);
+  border: none;
+  color: #0c1016;
+  font-weight: 700;
+  font-size: 13px;
+  padding: 8px 18px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+/* ---------- Go Live: Live Media folder row ---------- */
+.golive-media {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
+.golive-media-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-dim);
+  min-width: 0;
+}
+
+.golive-media-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+/* The path takes whatever room is left and ellipsizes from the left, so the
+   folder *name* (the end) stays readable however deep it lives. */
+.golive-media-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+.golive-media-path.empty {
+  font-family: inherit;
+  font-style: italic;
+  color: var(--text-dim);
+  direction: ltr;
+}
+
+.golive-media-count {
+  font-size: 12px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.golive-media-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 7px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.golive-media-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.golive-media-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.golive-media-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  max-width: 100ch;
+}
+
+/* ---------- "Relaunch to update" card ---------- */
+.update-card {
+  position: fixed;
+  left: 14px;
+  bottom: 118px; /* clear of the now-playing bar */
+  z-index: 40; /* above the page, below every modal overlay (50+) */
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 300px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  animation: update-card-in 260ms ease-out;
+}
+
+@keyframes update-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .update-card {
+    animation: none;
+  }
+}
+
+.update-card:hover {
+  border-color: var(--accent);
+}
+
+.update-card:hover .update-card-arrow {
+  transform: translateX(3px);
+  color: var(--accent);
+}
+
+.update-card-logo {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+}
+
+.update-card-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.update-card-title {
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.update-card-sub {
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.update-card-arrow {
+  flex-shrink: 0;
+  color: var(--text-dim);
+  transition:
+    transform 150ms ease,
+    color 150ms ease;
+}
+
+/* Held while on air: still visible, clearly not actionable yet. */
+.update-card.held {
+  cursor: default;
+  border-color: var(--border);
+}
+
+.update-card.held:hover .update-card-arrow {
+  transform: none;
+  color: var(--text-dim);
+}
+
+/* ---------- Live mode: folder nav + main column ---------- */
+.live-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.live-main .library {
+  flex: 1;
+  min-height: 0;
+}
+
+.live-sidebar .sidebar-folder-icon {
+  flex-shrink: 0;
+  color: var(--text-dim);
+}
+
+.live-sidebar .sidebar-item.active .sidebar-folder-icon {
+  color: var(--accent);
+}
+
+.live-sidebar-empty {
+  margin: 6px 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
+/* ---------- Update affordance in the mini / micro players ---------- */
+/* Mini: a pill at the left of the titlebar (the brand is absolutely centred,
+   the size buttons sit at the right — the left is the free space). */
+.mini-titlebar .mini-update {
+  margin-right: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.mini-titlebar .mini-update:hover {
+  background: var(--accent);
+  color: #0c1016;
+}
+
+/* Micro: no room for words — an accent icon beside the grow chevron. */
+.micro-top .mini-update.micro {
+  position: absolute;
+  right: 28px;
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  display: inline-flex;
+  padding: 2px;
+}
+
+/* Micro: the title normally reserves room for one button; with the update
+   icon beside the chevron it must leave room for two. */
+.micro-top .mini-title.with-update {
+  max-width: calc(100% - 72px);
+}
+
+/* ---------- Go Live: talk-over mic ---------- */
+.golive-mic {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
+.golive-mic.on {
+  border-color: rgba(224, 38, 90, 0.45);
+}
+
+.golive-mic-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: var(--text-dim);
+}
+
+.golive-mic-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 7px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.golive-mic-toggle:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.golive-mic-toggle.on {
+  background: #e0265a;
+  border-color: #e0265a;
+  color: #fff;
+}
+
+.golive-mic-toggle:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.golive-mic-select {
+  background-color: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--text);
+  padding: 6px 26px 6px 10px;
+  font-size: 12.5px;
+  font-family: inherit;
+  max-width: 220px;
+}
+
+.golive-mic-select:disabled {
+  opacity: 0.6;
+}
+
+/* Push-to-talk button: obviously a "hold" control, lit while held. */
+.golive-ptt {
+  padding: 6px 14px;
+  border-radius: 7px;
+  background: var(--bg-raised);
+  border: 1px dashed var(--accent);
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.golive-ptt.held {
+  background: #e0265a;
+  border: 1px solid #e0265a;
+  color: #fff;
+}
+
+.golive-mic-meter {
+  flex: 1 1 120px;
+  min-width: 80px;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.golive-mic-meter-fill {
+  height: 100%;
+  background: linear-gradient(to right, #3fbf6a 0%, #3fbf6a 70%, #e8a33d 85%, #e0265a 100%);
+  transition: width 60ms linear;
+}
+
+.golive-mic-live {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #e0265a;
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  animation: golive-pulse 1.4s ease-in-out infinite;
+}
+
+.golive-mic-params {
+  gap: 18px;
+}
+
+.golive-mic-param {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.golive-mic-param input[type="range"] {
+  width: 120px;
+}
+
+.golive-mic-param em {
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  min-width: 46px;
+}
+
+.golive-check.golive-mic-monitor {
+  flex: 0 0 auto;
+  font-size: 12px;
 }

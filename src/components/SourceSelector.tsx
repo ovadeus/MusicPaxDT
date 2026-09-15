@@ -5,7 +5,8 @@ export type SelectableSource =
   | "cd"
   | "aux"
   | "radio"
-  | "stream";
+  | "stream"
+  | "live";
 
 interface Source {
   key: string;
@@ -21,6 +22,9 @@ const SOURCES: Source[] = [
   { key: "radio", label: "Radio", enabled: true },
   { key: "library", label: "Library", enabled: true },
   { key: "stream", label: "Stream", enabled: true },
+  // Go Live: the on-air list — only the local Live Media folder, never the
+  // aggregated library, so nothing that can't broadcast is ever in view.
+  { key: "live", label: "Live", enabled: true },
 ];
 
 interface Props {

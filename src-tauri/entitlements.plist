@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Hardened Runtime entitlements for the Developer ID (non-sandboxed) build.
+	  Notarization requires the Hardened Runtime; under it, microphone/line-in
+	  access must be explicitly granted here (paired with NSMicrophoneUsageDescription
+	  in Info.plist). Network access and user-selected file access need no
+	  entitlement for a non-sandboxed app, and ScreenCaptureKit is gated by the
+	  runtime TCC prompt, so nothing else is required.
+	-->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+</dict>
+</plist>

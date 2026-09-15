@@ -10,7 +10,7 @@ import {
   PictureInPicture2,
 } from "lucide-react";
 import MpxLogo from "./components/MpxLogo";
-import { YouTubeIcon, SpotifyIcon } from "./components/BrandIcons";
+import { YouTubeIcon, SpotifyIcon, AiIcon } from "./components/BrandIcons";
 import CommandPalette, { type PaletteAction } from "./components/CommandPalette";
 import AIAssistantModal from "./components/AIAssistantModal";
 import ManageMusicMenu from "./components/ManageMusicMenu";
@@ -23,7 +23,11 @@ import {
   type ColumnPrefs,
 } from "./lib/columnPrefs";
 import GoLivePanel from "./components/GoLivePanel";
+import UpdateCard from "./components/UpdateCard";
+import LiveMediaSidebar, { inLiveFolder } from "./components/LiveMediaSidebar";
 import AddUrlModal from "./components/AddUrlModal";
+import BuildPlaylistWithAIModal from "./components/BuildPlaylistWithAIModal";
+import WelcomeModal from "./components/WelcomeModal";
 import SharePlaylistModal from "./components/SharePlaylistModal";
 import YouTubeSearchView from "./components/YouTubeSearchView";
 import EnrichReviewModal from "./components/EnrichReviewModal";
@@ -146,6 +150,15 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [addUrlMode, setAddUrlMode] = useState<"youtube" | "spotify" | null>(null);
+  const [aiBuildOpen, setAiBuildOpen] = useState(false);
+  // First-run welcome: shown until the user saves a key or skips (per install).
+  const [showWelcome, setShowWelcome] = useState(() => {
+    try {
+      return localStorage.getItem("musicpax.onboarded") !== "1";
+    } catch {
+      return false;
+    }
+  });
   const [shareTarget, setShareTarget] = useState<{ id: number; name: string } | null>(null);
   const [ytSearchOpen, setYtSearchOpen] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
@@ -194,32 +207,51 @@ export default function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [visualizerOpen, closeVisualizer]);
-  useEffect(() => {
-    if (settingsOpen) return; // re-check whenever the Settings dialog closes
-    // Gate the AI Assistant menu on the configured provider (a DB setting), NOT
-    // on reading the API key. Reading the keychain on launch makes macOS prompt
-    // for the login password every start (the app isn't code-signed); the key is
-    // only read later, when the assistant actually runs.
+  // Gate AI features on the configured provider AND a key being present — but
+  // read both from plain DB settings, never the keychain. Reading the keychain
+  // on launch makes macOS prompt for the login password every start (the app
+  // isn't code-signed); Settings/onboarding mirror "key present" into
+  // enrich.key_set.* flags, and the actual key is only read later, when a
+  // feature runs. Cloud providers require the user's own key (so no one is
+  // billed for someone else's usage); local Ollama needs none.
+  const refreshAiLabel = useCallback(() => {
     ipc
       .getSettings()
       .then((s) => {
         const p = s["enrich.ai_provider"];
-        setAiLabel(p && p !== "none" ? p : null);
+        // "ready" unless we KNOW the key is missing (flag === "0", written by
+        // Settings/onboarding). An absent flag means we haven't checked yet
+        // (e.g. first launch after upgrade) — allow it optimistically rather than
+        // falsely locking a user who already has a key; if it's actually missing
+        // the feature reports it and the flag then becomes "0".
+        const ready =
+          p === "ollama" ||
+          (!!p && p !== "none" && s[`enrich.key_set.${p}`] !== "0");
+        setAiLabel(ready ? p : null);
       })
       .catch(() => setAiLabel(null));
-  }, [settingsOpen]);
+  }, []);
+
+  useEffect(() => {
+    if (settingsOpen) return; // re-check whenever the Settings dialog closes
+    refreshAiLabel();
+  }, [settingsOpen, refreshAiLabel]);
   // Theater (in-app fullscreen) for the now-playing media.
-  const [mini, setMini] = useState(false);
+  // Window size ladder: full app → mini card → micro bar.
+  const [windowSize, setWindowSize] = useState<ipc.WindowSize>("full");
+  const mini = windowSize !== "full";
+  const micro = windowSize === "micro";
   const [miniVideo, setMiniVideo] = useState(false);
   const miniCoverRef = useRef<HTMLDivElement | null>(null);
   const [miniRect, setMiniRect] = useState<
     { top: number; left: number; width: number; height: number } | null
   >(null);
-  const toggleMini = useCallback((on: boolean) => {
-    setMini(on);
-    if (on) setTheater(false);
-    else setMiniVideo(false);
-    ipc.setMiniWindow(on).catch(() => {});
+  const resizeWindow = useCallback((size: ipc.WindowSize) => {
+    setWindowSize(size);
+    if (size !== "full") setTheater(false);
+    // Only the mini card has a cover slot the video can fill.
+    if (size !== "mini") setMiniVideo(false);
+    ipc.setWindowSize(size).catch(() => {});
   }, []);
   const [theater, setTheater] = useState(false);
   const [theaterRect, setTheaterRect] = useState<
@@ -227,6 +259,11 @@ export default function App() {
   >(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const [onAir, setOnAir] = useState(false);
+  // Mirror for callbacks that must not re-bind on every broadcast state change.
+  const onAirRef = useRef(false);
+  useEffect(() => {
+    onAirRef.current = onAir;
+  }, [onAir]);
   const [editTrack, setEditTrack] = useState<Track | null>(null);
   const [enrichingId, setEnrichingId] = useState<number | null>(null);
   const [enrichProgress, setEnrichProgress] = useState<{
@@ -415,6 +452,10 @@ export default function App() {
           const next = prev.map((x) => (x.id === t.id ? { ...x, rating: fav ? 0 : 1 } : x));
           return view.kind === "favorites" && fav ? next.filter((x) => x.id !== t.id) : next;
         });
+        // The Live view keeps its own list; the heart has to light up there too.
+        setLiveTracks((prev) =>
+          prev.map((x) => (x.id === t.id ? { ...x, rating: fav ? 0 : 1 } : x)),
+        );
       } catch (e) {
         showStatus(`${e}`);
       }
@@ -557,9 +598,9 @@ export default function App() {
       ipc.onPlaybackState(setPlayState),
       ipc.onRecordingState(setRecState),
       ipc.onEnrichProgress(setEnrichProgress),
-      ipc.onBroadcastState((s) => setOnAir(s.state !== "idle")),
+      ipc.onBroadcastState((s) => setOnAir(s.state !== "idle" && s.state !== "error")),
     ];
-    ipc.goLiveStatus().then((s) => setOnAir(s.state !== "idle")).catch(() => {});
+    ipc.goLiveStatus().then((s) => setOnAir(s.state !== "idle" && s.state !== "error")).catch(() => {});
     return () => {
       subs.forEach((p) => p.then((un) => un()));
     };
@@ -659,9 +700,17 @@ export default function App() {
           await ipc.play();
           setNow(await ipc.nowPlaying());
           setEngineStat(null);
-          setSource("library");
+          // Starting a track from a line-in or browse panel brings the library
+          // into view — but Live mode is where its own tracks are played
+          // from, and leaving it on every double-click threw the user out.
+          setSource((s) => (s === "live" ? s : "library"));
           setPositionMs(0);
           setTracks((prev) =>
+            prev.map((t) =>
+              t.id === track.id ? { ...t, playCount: t.playCount + 1 } : t,
+            ),
+          );
+          setLiveTracks((prev) =>
             prev.map((t) =>
               t.id === track.id ? { ...t, playCount: t.playCount + 1 } : t,
             ),
@@ -672,6 +721,11 @@ export default function App() {
             track.sourceKind === "radio" ||
             track.sourceKind === "stream")
         ) {
+          // Streams play here but never reach the broadcast tee. Say so the
+          // moment it happens, rather than letting the station go silent.
+          if (onAirRef.current) {
+            showStatus("Not on air — only Live Media (local files) broadcasts. Playing here only.");
+          }
           await ipc.stop().catch(() => {});
           setNow(null);
           setStream(track);
@@ -682,7 +736,7 @@ export default function App() {
           setEngineStat(null);
           // radio/stream keep their browse panel open; others go to Library
           if (track.sourceKind !== "radio" && track.sourceKind !== "stream") {
-            setSource("library");
+            setSource((s) => (s === "live" ? s : "library"));
           }
           if (track.id >= 0) {
             ipc.recordPlay(track.id).catch((e) => showStatus(`${e}`));
@@ -868,6 +922,11 @@ export default function App() {
         setSource(next);
         return;
       }
+      if (next === "live") {
+        // The on-air view. Playback is left alone — you may already be live.
+        openGoLive();
+        return;
+      }
       setStream(null);
       const stat = await ipc.startLineIn(next as LineInSource);
       setNow(null);
@@ -902,6 +961,153 @@ export default function App() {
     });
   };
 
+  // ----- In-app updates ----------------------------------------------------
+  // A newer release is downloaded, verified and staged in the background; the
+  // card only appears once that's done, so the click is a restart. Checked a
+  // little after launch (not competing with startup) and every six hours.
+  const [updateReady, setUpdateReady] = useState<ipc.StagedUpdate | null>(null);
+  useEffect(() => {
+    // A dev binary isn't an installed bundle — there is nothing to replace.
+    if (import.meta.env.DEV) return;
+    let cancelled = false;
+    let staged = false;
+    const look = async () => {
+      if (staged) return;
+      let found: ipc.AvailableUpdate | null;
+      try {
+        found = await ipc.findUpdate();
+      } catch {
+        return; // offline, or no manifest published yet: quietly try later
+      }
+      if (!found || cancelled) return;
+      try {
+        await found.install();
+      } catch (e) {
+        // Unlike a missing manifest, a failed download or install won't fix
+        // itself — say so, rather than leaving a half-done update invisible.
+        if (!cancelled) showStatus(`Update to ${found.version} failed: ${e}`);
+        return;
+      }
+      if (cancelled) return;
+      staged = true;
+      setUpdateReady({ version: found.version, notes: found.notes });
+      // The card can be missed (another app in front, hours in the mini
+      // player); a status line marks the moment so the version change is
+      // never a surprise at the next launch.
+      showStatus(`MUSICPAX ${found.version} is ready — Relaunch to update whenever convenient.`);
+    };
+    const first = window.setTimeout(() => void look(), 15_000);
+    const every = window.setInterval(() => void look(), 6 * 60 * 60 * 1000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(first);
+      window.clearInterval(every);
+    };
+  }, [showStatus]);
+  // A quiet "Updated to x.y.z" the first time a new version runs. An update
+  // can install unseen — in the background, or while the window was hidden —
+  // and then simply *be* the next launch; this keeps that from being a
+  // surprise. Nothing on a first-ever launch.
+  useEffect(() => {
+    ipc
+      .appVersion()
+      .then((v) => {
+        let prev: string | null = null;
+        try {
+          prev = localStorage.getItem("musicpax.lastVersion");
+          localStorage.setItem("musicpax.lastVersion", v);
+        } catch {
+          return;
+        }
+        if (prev && prev !== v) showStatus(`Updated to MUSICPAX ${v}.`);
+      })
+      .catch(() => {});
+  }, [showStatus]);
+
+  const relaunchForUpdate = () => {
+    if (onAir) {
+      showStatus("Finish your broadcast first — the update installs when you relaunch.");
+      return;
+    }
+    ipc.relaunchApp().catch((e) => showStatus(`${e}`));
+  };
+
+  // ----- Live Media: the Go Live on-air folder ------------------------------
+  // Only local files can broadcast, so the Live view is exactly the OWNED
+  // tracks under one chosen folder — never the aggregated library.
+  const [liveDir, setLiveDir] = useState<string | null>(null);
+  const [liveTracks, setLiveTracks] = useState<Track[]>([]);
+  // The folder (relative to liveDir) chosen in the Live nav; null = everything.
+  const [liveFolder, setLiveFolder] = useState<string | null>(null);
+  const liveShown =
+    liveFolder == null || !liveDir
+      ? liveTracks
+      : liveTracks.filter((t) => inLiveFolder(liveDir, t.uri, liveFolder));
+  const refreshLiveMedia = useCallback(async () => {
+    try {
+      const dir = await ipc.liveMediaDir();
+      setLiveDir(dir);
+      setLiveTracks(dir ? await ipc.listLiveMedia() : []);
+    } catch (e) {
+      showStatus(`${e}`);
+    }
+  }, [showStatus]);
+
+  // Opening Go Live switches the main view to Live Media and refreshes it, so
+  // files dropped into the folder since last time are already there.
+  const openGoLive = useCallback(() => {
+    // Live mode is its own world: streams (YouTube/radio) can't air and
+    // aren't reachable here, so anything of that kind playing stops now.
+    setStream(null);
+    setLiveFolder(null);
+    setSource("live");
+    setGoLiveOpen(true);
+    ipc
+      .rescanLiveMedia()
+      .catch(() => {})
+      .then(() => refreshLiveMedia());
+  }, [refreshLiveMedia]);
+
+  const handleSelectLiveFolder = async () => {
+    const folder = await open({
+      directory: true,
+      multiple: false,
+      title: "Choose your Live Media folder",
+    });
+    if (typeof folder !== "string") return;
+    setBusy(true);
+    try {
+      const r = await ipc.setLiveMediaDir(folder);
+      showStatus(
+        `Live Media: ${r.imported} ${r.imported === 1 ? "file" : "files"} found` +
+          (r.relinked ? `, ${r.relinked} moved ${r.relinked === 1 ? "file" : "files"} relinked` : ""),
+      );
+      setLiveFolder(null);
+      await refreshLiveMedia();
+    } catch (e) {
+      showStatus(`Live Media scan failed: ${e}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRescanLive = async () => {
+    setBusy(true);
+    try {
+      const r = await ipc.rescanLiveMedia();
+      const parts = [
+        r.imported ? `${r.imported} new ${r.imported === 1 ? "file" : "files"}` : "",
+        r.relinked ? `${r.relinked} moved ${r.relinked === 1 ? "file" : "files"} relinked` : "",
+      ].filter(Boolean);
+      showStatus(parts.length ? `Live Media: ${parts.join(", ")}` : "Live Media is up to date");
+      await refreshLiveMedia();
+    } catch (e) {
+      showStatus(`Live Media scan failed: ${e}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleImport = async () => {
     const folder = await open({
       directory: true,
@@ -913,7 +1119,8 @@ export default function App() {
     try {
       const result = await ipc.importFolder(folder);
       const errs = result.errors.length ? `, ${result.errors.length} errors` : "";
-      showStatus(`Imported ${result.imported}, skipped ${result.skipped}${errs}`);
+      const moved = result.relinked ? `, ${result.relinked} moved files relinked` : "";
+      showStatus(`Imported ${result.imported}${moved}, skipped ${result.skipped}${errs}`);
       await refreshTracks();
     } catch (e) {
       showStatus(`Import failed: ${e}`);
@@ -967,7 +1174,7 @@ export default function App() {
   };
 
   const lineIn =
-    source !== "library" && source !== "radio" && source !== "stream"
+    source !== "library" && source !== "radio" && source !== "stream" && source !== "live"
       ? (source as LineInSource)
       : null;
 
@@ -1023,7 +1230,7 @@ export default function App() {
   // Mini player: measure the cover slot so the live video (when toggled on) can
   // fill it on top of the mini overlay.
   useEffect(() => {
-    if (!mini || !theaterVideo) {
+    if (!mini || micro || !theaterVideo) {
       setMiniRect(null);
       return;
     }
@@ -1041,7 +1248,7 @@ export default function App() {
       ro.disconnect();
       window.removeEventListener("resize", measure);
     };
-  }, [mini, theaterVideo]);
+  }, [mini, micro, theaterVideo]);
 
   // The rect the floating video players fill: the theater stage, or the mini
   // cover slot (lifted above the mini overlay), or nowhere.
@@ -1078,13 +1285,20 @@ export default function App() {
     },
     { id: "settings", label: "Open Settings", run: () => setSettingsOpen(true) },
     { id: "viz", label: "Open Visualizer", run: () => setVisualizerOpen(true) },
-    { id: "mini", label: "Open Mini Player", run: () => toggleMini(true) },
+    { id: "mini", label: "Open Mini Player", run: () => resizeWindow("mini") },
+    { id: "micro", label: "Open Micro Player", run: () => resizeWindow("micro") },
     { id: "yt", label: "Search YouTube", hint: "add music", run: () => setYtSearchOpen(true) },
     {
       id: "spotify",
       label: "Import Spotify Playlist",
       hint: "add music",
       run: () => setAddUrlMode("spotify"),
+    },
+    {
+      id: "aibuild",
+      label: "Build Playlist with AI",
+      hint: "add music",
+      run: () => setAiBuildOpen(true),
     },
     { id: "folder", label: "Import Music Folder", hint: "add music", run: () => handleImport() },
     { id: "mpx", label: "Import .mpx Playlist", hint: "add music", run: () => handleImportMpx() },
@@ -1094,7 +1308,7 @@ export default function App() {
       hint: "re-resolve dead YouTube streams",
       run: () => handleRepair(),
     },
-    { id: "golive", label: "Go Live", hint: "broadcast", run: () => setGoLiveOpen(true) },
+    { id: "golive", label: "Go Live", hint: "broadcast", run: openGoLive },
     ...(aiLabel
       ? [{ id: "ai", label: "AI Assistant", run: () => setAiAssistantOpen(true) }]
       : []),
@@ -1122,22 +1336,36 @@ export default function App() {
                   </option>
                 ))}
               </select>
-              <button
-                className="settings-button brand-youtube"
-                onClick={() => setYtSearchOpen(true)}
-                title="Search YouTube"
-                aria-label="Search YouTube"
-              >
-                <YouTubeIcon size={18} />
-              </button>
-              <button
-                className="settings-button brand-spotify"
-                onClick={() => setAddUrlMode("spotify")}
-                title="Import Spotify Playlist"
-                aria-label="Import Spotify Playlist"
-              >
-                <SpotifyIcon size={18} />
-              </button>
+              {/* Adding aggregated music has no place in Live mode: nothing
+                  it produces can go on air. */}
+              {source !== "live" && (
+                <>
+                  <button
+                    className="settings-button brand-youtube"
+                    onClick={() => setYtSearchOpen(true)}
+                    title="Search YouTube"
+                    aria-label="Search YouTube"
+                  >
+                    <YouTubeIcon size={18} />
+                  </button>
+                  <button
+                    className="settings-button brand-spotify"
+                    onClick={() => setAddUrlMode("spotify")}
+                    title="Import Spotify Playlist"
+                    aria-label="Import Spotify Playlist"
+                  >
+                    <SpotifyIcon size={18} />
+                  </button>
+                  <button
+                    className="settings-button brand-ai"
+                    onClick={() => setAiBuildOpen(true)}
+                    title="Build Playlist with AI"
+                    aria-label="Build Playlist with AI"
+                  >
+                    <AiIcon size={18} />
+                  </button>
+                </>
+              )}
               <ManageMusicMenu
                 busy={busy}
                 canEnrich={source === "library" && tracks.length > 0 && enrichProgress == null}
@@ -1149,7 +1377,7 @@ export default function App() {
                 onRepair={handleRepair}
                 aiAvailable={!!aiLabel}
                 onAiAssistant={() => setAiAssistantOpen(true)}
-                onGoLive={() => setGoLiveOpen(true)}
+                onGoLive={openGoLive}
               />
             </>
           )}
@@ -1157,7 +1385,7 @@ export default function App() {
             <>
               <button
                 className="settings-button"
-                onClick={() => toggleMini(true)}
+                onClick={() => resizeWindow("mini")}
                 title="Mini player"
               >
                 <PictureInPicture2 size={16} />
@@ -1187,6 +1415,20 @@ export default function App() {
           />
         </div>
       </header>
+
+      {/* Slides in directly under the header — an inline bar, not an overlay,
+          so editing connection details can't be dismissed by a stray click. */}
+      {goLiveOpen && (
+        <GoLivePanel
+          onClose={() => setGoLiveOpen(false)}
+          onError={showStatus}
+          liveDir={liveDir}
+          liveCount={liveTracks.length}
+          busyMedia={busy}
+          onSelectFolder={handleSelectLiveFolder}
+          onRescan={handleRescanLive}
+        />
+      )}
 
       {status && <div className="status-banner">{status}</div>}
 
@@ -1287,6 +1529,54 @@ export default function App() {
               listenOrder={listenOrder}
               onListenOrderChange={changeListenOrder}
               onReshuffle={reshuffle}
+            />
+          </div>
+        </div>
+      ) : source === "live" ? (
+        <div className="library-layout">
+          {liveDir && (
+            <LiveMediaSidebar
+              dir={liveDir}
+              tracks={liveTracks}
+              selected={liveFolder}
+              onSelect={setLiveFolder}
+            />
+          )}
+          <div className="live-main">
+            <LibraryTable
+              tracks={liveShown}
+              heading={liveFolder ? liveFolder.slice(liveFolder.lastIndexOf("/") + 1) : "Live Media"}
+              fadeKey={`live:${liveFolder ?? ""}`}
+              searchable={false}
+              emptyMessage={
+                liveDir
+                  ? "No audio files in the Live Media folder yet — add some, then press Rescan in Go Live."
+                  : "Choose your Live Media folder in Go Live above. Only local files can go on air."
+              }
+              query=""
+              onQueryChange={() => {}}
+              sort={sort}
+              onSortChange={setSort}
+              onActivate={(t) => void playTrack(t, liveShown)}
+              onEdit={setEditTrack}
+              onEnrich={handleEnrichTrack}
+              onToggleFavorite={toggleFavorite}
+              visibleColumns={columnPrefs}
+              curator={curator}
+              enrichingId={enrichingId}
+              nowPlayingId={
+                stream ? stream.id : playState === "stopped" ? null : (now?.track.id ?? null)
+              }
+              playlists={playlists}
+              onAddToPlaylist={(playlistId, trackId) => {
+                ipc
+                  .addToPlaylist(playlistId, trackId)
+                  .then(() => {
+                    refreshPlaylists();
+                    showStatus("Added to playlist");
+                  })
+                  .catch((e) => showStatus(`${e}`));
+              }}
             />
           </div>
         </div>
@@ -1514,6 +1804,35 @@ export default function App() {
                 `Deleted ${removed} track${removed === 1 ? "" : "s"} from the library`,
               );
             }}
+            onBulkAddToPlaylist={async (playlistId, ids) => {
+              try {
+                const added = await ipc.addTracksToPlaylist(playlistId, ids);
+                refreshPlaylists();
+                if (view.kind === "playlist" && view.id === playlistId) refreshTracks();
+                const skipped = ids.length - added;
+                showStatus(
+                  `Added ${added} track${added === 1 ? "" : "s"} to playlist` +
+                    (skipped > 0 ? ` (${skipped} already there)` : ""),
+                );
+              } catch (e) {
+                showStatus(`${e}`);
+                throw e; // let the table keep the selection so the user can retry
+              }
+            }}
+            onCreatePlaylistWithTracks={async (name, ids) => {
+              try {
+                const id = await ipc.createPlaylist(name);
+                const added = await ipc.addTracksToPlaylist(id, ids);
+                refreshPlaylists();
+                setView({ kind: "playlist", id, name });
+                showStatus(
+                  `Created “${name}” with ${added} track${added === 1 ? "" : "s"}`,
+                );
+              } catch (e) {
+                showStatus(`${e}`);
+                throw e;
+              }
+            }}
             onShare={
               view.kind === "playlist"
                 ? () => setShareTarget({ id: view.id, name: view.name })
@@ -1598,7 +1917,6 @@ export default function App() {
             if (dur > 0) setStreamDur(dur);
           }}
           onEnded={() => advanceFromEnd(stream.id)}
-          onClose={() => setStream(null)}
           onFatalError={handleStreamFatal}
           theaterRect={videoRect}
         />
@@ -1662,7 +1980,11 @@ export default function App() {
           onVolume={handleVolume}
           onPrev={() => playPrev(nowRef.current.id)}
           onNext={() => playNext(nowRef.current.id)}
-          onExit={() => toggleMini(false)}
+          micro={micro}
+          onGrow={() => resizeWindow(micro ? "mini" : "full")}
+          onShrink={micro ? undefined : () => resizeWindow("micro")}
+          updateVersion={updateReady?.version ?? null}
+          onRelaunch={relaunchForUpdate}
           canStep={!lineIn && (stream != null || now != null)}
           coverRef={miniCoverRef}
         />
@@ -1709,6 +2031,7 @@ export default function App() {
           onApplied={(n) => {
             showStatus(`Applied ${n} change${n === 1 ? "" : "s"}`);
             refreshTracks();
+            void refreshLiveMedia();
           }}
           onError={showStatus}
         />
@@ -1753,8 +2076,43 @@ export default function App() {
         />
       )}
 
-      {goLiveOpen && (
-        <GoLivePanel onClose={() => setGoLiveOpen(false)} onError={showStatus} />
+      {aiBuildOpen && (
+        <BuildPlaylistWithAIModal
+          providerLabel={aiLabel}
+          onClose={() => setAiBuildOpen(false)}
+          onError={showStatus}
+          onDone={(msg) => {
+            showStatus(msg);
+            refreshPlaylists();
+            refreshTracks();
+          }}
+          onOpenSettings={() => {
+            setAiBuildOpen(false);
+            setSettingsOpen(true);
+          }}
+        />
+      )}
+
+      {showWelcome && (
+        <WelcomeModal
+          onError={showStatus}
+          onComplete={(saved) => {
+            try {
+              localStorage.setItem("musicpax.onboarded", "1");
+            } catch {
+              /* private mode / storage disabled — onboarding just re-shows */
+            }
+            setShowWelcome(false);
+            if (saved) {
+              refreshAiLabel();
+              showStatus("AI features enabled");
+            }
+          }}
+        />
+      )}
+
+      {updateReady && windowSize === "full" && (
+        <UpdateCard version={updateReady.version} onAir={onAir} onRelaunch={relaunchForUpdate} />
       )}
 
       {shareTarget && (
@@ -1793,6 +2151,7 @@ export default function App() {
               n > 0 ? `Applied ${n} track update(s)` : "No changes applied",
             );
             refreshTracks();
+            void refreshLiveMedia();
           }}
         />
       )}
@@ -1806,6 +2165,9 @@ export default function App() {
           onSaved={(updated) => {
             showStatus(`Updated “${updated.title ?? "track"}”`);
             refreshTracks();
+            // The Live view keeps its own list; without this an edit saved
+            // to the file and the database still showed the old row.
+            setLiveTracks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
             // keep the docked stream label fresh if we just edited it
             setStream((cur) => (cur && cur.id === updated.id ? updated : cur));
             setNow((cur) =>
@@ -1825,6 +2187,7 @@ export default function App() {
             }
             refreshPlaylists();
             refreshTracks();
+            setLiveTracks((prev) => prev.filter((t) => t.id !== removed.id));
           }}
         />
       )}

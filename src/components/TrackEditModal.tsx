@@ -34,7 +34,9 @@ export default function TrackEditModal({
   const [busy, setBusy] = useState(false);
   const [looking, setLooking] = useState(false);
 
-  const writesToFile = track.capability === "OWNED" && track.sourceKind === "local";
+  // Live Media rows are local files too — edits reach the file the same way.
+  const writesToFile =
+    track.capability === "OWNED" && (track.sourceKind === "local" || track.sourceKind === "live");
   // Only STREAM_PLAYABLE YouTube tracks expose an editable source URL — paste a
   // different video to swap it (e.g. a dead/region-blocked video, or a better
   // match). The embed reads the id straight off the uri, so the swap is live.

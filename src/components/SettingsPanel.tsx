@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { X } from "lucide-react";
+import YouTubeKeySetup from "./YouTubeKeySetup";
 import * as ipc from "../lib/ipc";
 import { COLUMN_TOGGLES, type ColumnPrefs } from "../lib/columnPrefs";
 import type { EnrichIntegrationStatus, IntegrationStatus } from "../lib/types";
@@ -8,8 +9,17 @@ const AI_PROVIDERS = [
   { value: "none", label: "None (free tiers only)" },
   { value: "anthropic", label: "Anthropic (Claude)" },
   { value: "openai", label: "OpenAI" },
+  { value: "gemini", label: "Google Gemini" },
   { value: "ollama", label: "Ollama (local, free)" },
 ];
+
+/// Cloud providers that need an API key (keychain) and accept a model id.
+/// Defaults match `resolve_llm` in the Rust core.
+const CLOUD_AI: Record<string, { label: string; modelPlaceholder: string }> = {
+  anthropic: { label: "Anthropic", modelPlaceholder: "claude-opus-4-8" },
+  openai: { label: "OpenAI", modelPlaceholder: "gpt-4o-mini" },
+  gemini: { label: "Gemini", modelPlaceholder: "gemini-2.5-flash" },
+};
 
 interface Props {
   onClose: () => void;
@@ -53,7 +63,7 @@ export default function SettingsPanel({
   const [loaded, setLoaded] = useState(false);
   const [integrations, setIntegrations] = useState<IntegrationStatus | null>(null);
   const [enrich, setEnrich] = useState<EnrichIntegrationStatus | null>(null);
-  const [ytKey, setYtKey] = useState("");
+  const [ytSetupOpen, setYtSetupOpen] = useState(false);
   const [spotifyId, setSpotifyId] = useState("");
   const [spotifySecret, setSpotifySecret] = useState("");
   const [acoustidKey, setAcoustidKey] = useState("");
@@ -62,8 +72,25 @@ export default function SettingsPanel({
   const [detecting, setDetecting] = useState(false);
   const [detectErr, setDetectErr] = useState<string | null>(null);
 
+  // Keychain reads happen only here (Settings is open = a user action), never at
+  // launch. Mirror "is a key present" into plain settings flags so the app can
+  // gate AI features on startup without touching the keychain (which would make
+  // an unsigned build prompt for the login password every launch).
   const refreshEnrich = () =>
-    ipc.enrichIntegrationStatus().then(setEnrich).catch(() => {});
+    ipc
+      .enrichIntegrationStatus()
+      .then((s) => {
+        setEnrich(s);
+        const flags: Record<string, boolean> = {
+          anthropic: s.anthropicKey,
+          openai: s.openaiKey,
+          gemini: s.geminiKey,
+        };
+        for (const [provider, present] of Object.entries(flags)) {
+          ipc.setSetting(`enrich.key_set.${provider}`, present ? "1" : "0").catch(() => {});
+        }
+      })
+      .catch(() => {});
 
   useEffect(() => {
     ipc
@@ -110,6 +137,7 @@ export default function SettingsPanel({
     try {
       if (provider === "anthropic") await ipc.setAnthropicKey(aiKey);
       else if (provider === "openai") await ipc.setOpenaiKey(aiKey);
+      else if (provider === "gemini") await ipc.setGeminiKey(aiKey);
       setAiKey("");
       await refreshEnrich();
     } catch (e) {
@@ -117,10 +145,8 @@ export default function SettingsPanel({
     }
   };
 
-  const saveYoutubeKey = async () => {
+  const refreshIntegrations = async () => {
     try {
-      await ipc.setYoutubeApiKey(ytKey);
-      setYtKey("");
       setIntegrations(await ipc.integrationStatus());
     } catch (e) {
       onError(`${e}`);
@@ -158,9 +184,11 @@ export default function SettingsPanel({
   const aiModel = values[modelKey] ?? "";
   const spendCap = values["enrich.spend_cap_usd"] ?? "1.0";
   const ollamaHost = values["enrich.ollama_host"] ?? "http://localhost:11434";
+  const cloudAi = CLOUD_AI[aiProvider];
   const aiKeyConfigured =
     (aiProvider === "anthropic" && enrich?.anthropicKey) ||
-    (aiProvider === "openai" && enrich?.openaiKey);
+    (aiProvider === "openai" && enrich?.openaiKey) ||
+    (aiProvider === "gemini" && enrich?.geminiKey);
 
   return (
     <div className="settings-overlay" onClick={onClose}>
@@ -270,14 +298,8 @@ export default function SettingsPanel({
                   </em>
                 </span>
                 <div className="integration-inputs">
-                  <input
-                    type="password"
-                    placeholder="Paste API key"
-                    value={ytKey}
-                    onChange={(e) => setYtKey(e.target.value)}
-                  />
-                  <button onClick={saveYoutubeKey} disabled={!ytKey.trim()}>
-                    Save
+                  <button onClick={() => setYtSetupOpen(true)}>
+                    {integrations?.youtubeApiKey ? "Replace" : "Set up — it's free"}
                   </button>
                 </div>
               </div>
@@ -380,7 +402,7 @@ export default function SettingsPanel({
               </div>
 
               <label className="settings-field">
-                <span>AI provider (for messy-title cleanup)</span>
+                <span>AI provider (title cleanup, AI Assistant, playlist builder)</span>
                 <select
                   value={aiProvider}
                   onChange={(e) => update("enrich.ai_provider", e.target.value)}
@@ -393,23 +415,23 @@ export default function SettingsPanel({
                 </select>
               </label>
 
-              {(aiProvider === "anthropic" || aiProvider === "openai") && (
+              {cloudAi && (
                 <label className="settings-field">
                   <span>Model</span>
                   <input
                     key={modelKey}
                     type="text"
-                    placeholder={aiProvider === "anthropic" ? "claude-opus-4-8" : "gpt-4o-mini"}
+                    placeholder={cloudAi.modelPlaceholder}
                     defaultValue={aiModel}
                     onBlur={(e) => update(modelKey, e.target.value)}
                   />
                 </label>
               )}
 
-              {(aiProvider === "anthropic" || aiProvider === "openai") && (
+              {cloudAi && (
                 <div className="integration-row">
                   <span>
-                    {aiProvider === "anthropic" ? "Anthropic" : "OpenAI"} API key{" "}
+                    {cloudAi.label} API key{" "}
                     <em className={aiKeyConfigured ? "ok" : ""}>
                       {aiKeyConfigured ? "configured" : "not set"}
                     </em>
@@ -417,12 +439,15 @@ export default function SettingsPanel({
                   <div className="integration-inputs">
                     <input
                       type="password"
-                      placeholder="Paste API key"
+                      autoComplete="off"
+                      // The real key never leaves the keychain; when one is saved
+                      // we show dots so the field reads as "set" rather than empty.
+                      placeholder={aiKeyConfigured ? "••••••••••••••••" : "Paste API key"}
                       value={aiKey}
                       onChange={(e) => setAiKey(e.target.value)}
                     />
                     <button onClick={() => saveAiKey(aiProvider)} disabled={!aiKey.trim()}>
-                      Save
+                      {aiKeyConfigured ? "Replace" : "Save"}
                     </button>
                   </div>
                 </div>
@@ -519,6 +544,13 @@ export default function SettingsPanel({
           </>
         )}
       </div>
+
+      {ytSetupOpen && (
+        <YouTubeKeySetup
+          onClose={() => setYtSetupOpen(false)}
+          onSaved={refreshIntegrations}
+        />
+      )}
     </div>
   );
 }

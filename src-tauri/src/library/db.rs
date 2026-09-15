@@ -117,6 +117,43 @@ fn migrate(conn: &Connection) -> AppResult<()> {
         tx.pragma_update(None, "user_version", 5)?;
         tx.commit()?;
     }
+    if version < 6 {
+        // Index the id-reference junction tables. `tracks` holds each track once
+        // (unique on uri); playlists / crates / history / cues reference it by
+        // track_id. Loading a playlist (WHERE playlist_id = ?) and deleting a
+        // track (cascade WHERE track_id = ?) were full table scans without these.
+        // Additive and behavior-preserving — just keeps lookups O(log n) as
+        // libraries, playlists, and history grow large.
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_playlist_items_playlist ON playlist_items(playlist_id);
+             CREATE INDEX IF NOT EXISTS idx_playlist_items_track    ON playlist_items(track_id);
+             CREATE INDEX IF NOT EXISTS idx_crate_items_crate       ON crate_items(crate_id);
+             CREATE INDEX IF NOT EXISTS idx_crate_items_track       ON crate_items(track_id);
+             CREATE INDEX IF NOT EXISTS idx_cues_track              ON cues(track_id);
+             CREATE INDEX IF NOT EXISTS idx_history_track           ON history(track_id);",
+        )?;
+        tx.pragma_update(None, "user_version", 6)?;
+        tx.commit()?;
+    }
+    if version < 7 {
+        // Live Media becomes its own world. Files under the chosen Live folder
+        // were imported as ordinary library rows (source_kind 'local') and so
+        // mixed into the aggregated library; retag them 'live' so they leave
+        // it. Playlist references survive (same ids) and nothing is deleted.
+        // No Live folder configured → the subquery is NULL → no rows match.
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE tracks SET source_kind = 'live'
+             WHERE capability = 'OWNED' AND source_kind = 'local'
+               AND (SELECT value FROM settings WHERE key = 'live.media_dir') IS NOT NULL
+               AND substr(uri, 1, length(rtrim((SELECT value FROM settings WHERE key = 'live.media_dir'), '/') || '/'))
+                   = rtrim((SELECT value FROM settings WHERE key = 'live.media_dir'), '/') || '/'",
+            [],
+        )?;
+        tx.pragma_update(None, "user_version", 7)?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
@@ -303,7 +340,8 @@ pub fn list_tracks(
             let sql = format!(
                 "SELECT * FROM tracks
                  WHERE id IN (SELECT rowid FROM tracks_fts WHERE tracks_fts MATCH ?1)
-                   AND media_type = ?2 ORDER BY {order} LIMIT ?3 OFFSET ?4"
+                   AND media_type = ?2 AND source_kind != 'live'
+                 ORDER BY {order} LIMIT ?3 OFFSET ?4"
             );
             let mut stmt = conn.prepare(&sql)?;
             collect(&mut stmt, params![fts_expr(q), m, limit, offset])?;
@@ -312,6 +350,7 @@ pub fn list_tracks(
             let sql = format!(
                 "SELECT * FROM tracks
                  WHERE id IN (SELECT rowid FROM tracks_fts WHERE tracks_fts MATCH ?1)
+                   AND source_kind != 'live'
                  ORDER BY {order} LIMIT ?2 OFFSET ?3"
             );
             let mut stmt = conn.prepare(&sql)?;
@@ -319,16 +358,40 @@ pub fn list_tracks(
         }
         (None, Some(m)) => {
             let sql = format!(
-                "SELECT * FROM tracks WHERE media_type = ?1 ORDER BY {order} LIMIT ?2 OFFSET ?3"
+                "SELECT * FROM tracks WHERE media_type = ?1 AND source_kind != 'live'
+                 ORDER BY {order} LIMIT ?2 OFFSET ?3"
             );
             let mut stmt = conn.prepare(&sql)?;
             collect(&mut stmt, params![m, limit, offset])?;
         }
         (None, None) => {
-            let sql = format!("SELECT * FROM tracks ORDER BY {order} LIMIT ?1 OFFSET ?2");
+            // Live Media rows are excluded from every aggregated view: Live mode
+            // is a separate world, and its files never mix into the library.
+            let sql = format!(
+                "SELECT * FROM tracks WHERE source_kind != 'live' ORDER BY {order} LIMIT ?1 OFFSET ?2"
+            );
             let mut stmt = conn.prepare(&sql)?;
             collect(&mut stmt, params![limit, offset])?;
         }
+    }
+    Ok(tracks)
+}
+
+/// OWNED tracks whose file lives under `dir` (recursively) — the Live Media
+/// list. Only files on this machine can go on air, so this is exactly the set
+/// Go Live may play. Prefix-matched with substr rather than LIKE so a folder
+/// named e.g. `My_Music` or `100%` can't act as a wildcard.
+pub fn list_tracks_under(conn: &Connection, dir: &str) -> AppResult<Vec<Track>> {
+    let prefix = format!("{}/", dir.trim_end_matches('/'));
+    let mut stmt = conn.prepare(
+        "SELECT * FROM tracks
+         WHERE capability = 'OWNED' AND substr(uri, 1, length(?1)) = ?1
+         ORDER BY artist COLLATE NOCASE, album COLLATE NOCASE, title COLLATE NOCASE",
+    )?;
+    let rows = stmt.query_map(params![prefix], track_from_row)?;
+    let mut tracks = Vec::new();
+    for row in rows {
+        tracks.push(row?);
     }
     Ok(tracks)
 }
@@ -437,8 +500,10 @@ pub fn set_track_favorite(conn: &Connection, id: i64, favorite: bool) -> AppResu
 }
 
 /// (id, uri) for every local-file track — used to flag files that have moved.
+/// Live Media rows are local files too, so they get the same relink care.
 pub fn local_track_uris(conn: &Connection) -> AppResult<Vec<(i64, String)>> {
-    let mut stmt = conn.prepare("SELECT id, uri FROM tracks WHERE source_kind = 'local'")?;
+    let mut stmt =
+        conn.prepare("SELECT id, uri FROM tracks WHERE source_kind IN ('local', 'live')")?;
     let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
     let mut out = Vec::new();
     for row in rows {
@@ -451,6 +516,33 @@ pub fn local_track_uris(conn: &Connection) -> AppResult<Vec<(i64, String)>> {
 pub fn set_track_uri(conn: &Connection, id: i64, uri: &str) -> AppResult<Track> {
     conn.execute("UPDATE tracks SET uri = ?1 WHERE id = ?2", params![uri, id])?;
     get_track(conn, id)
+}
+
+/// Repoint a track to where its file turned up, and re-home it to the kind of
+/// the folder it now lives in (a file moved into the Live folder becomes
+/// 'live'; one moved out becomes 'local'). Everything else about the row —
+/// id, play count, rating, playlist membership — is untouched.
+pub fn relink_track(conn: &Connection, id: i64, uri: &str, source_kind: &str) -> AppResult<()> {
+    conn.execute(
+        "UPDATE tracks SET uri = ?1, source_kind = ?2 WHERE id = ?3",
+        params![uri, source_kind, id],
+    )?;
+    Ok(())
+}
+
+/// (id, uri, duration_ms) for every local-file row — the index a scan uses to
+/// recognise a file that has moved (same name and duration, old path gone).
+pub fn owned_file_rows(conn: &Connection) -> AppResult<Vec<(i64, String, Option<i64>)>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, uri, duration_ms FROM tracks
+         WHERE capability = 'OWNED' AND source_kind IN ('local', 'live')",
+    )?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
 }
 
 pub fn get_track_by_uri(conn: &Connection, uri: &str) -> AppResult<Option<Track>> {
@@ -644,6 +736,44 @@ pub fn add_to_playlist(conn: &Connection, playlist_id: i64, track_id: i64) -> Ap
     Ok(())
 }
 
+/// Append many tracks to a playlist in one transaction, preserving the given
+/// order and skipping tracks already in the playlist (so a repeated "add
+/// selected" can't create duplicate rows). Returns how many were newly added.
+pub fn add_tracks_to_playlist(
+    conn: &Connection,
+    playlist_id: i64,
+    track_ids: &[i64],
+) -> AppResult<usize> {
+    let tx = conn.unchecked_transaction()?;
+    let mut existing: std::collections::HashSet<i64> = {
+        let mut stmt =
+            tx.prepare("SELECT track_id FROM playlist_items WHERE playlist_id = ?1")?;
+        let rows = stmt.query_map([playlist_id], |r| r.get::<_, i64>(0))?;
+        rows.collect::<Result<_, _>>()?
+    };
+    let mut position: i64 = tx.query_row(
+        "SELECT COALESCE(MAX(position), 0) FROM playlist_items WHERE playlist_id = ?1",
+        [playlist_id],
+        |r| r.get(0),
+    )?;
+    let mut added = 0usize;
+    for &track_id in track_ids {
+        // Skip duplicates, both against existing rows and within this batch.
+        if !existing.insert(track_id) {
+            continue;
+        }
+        position += 1;
+        tx.execute(
+            "INSERT INTO playlist_items(playlist_id, track_id, position)
+             VALUES (?1, ?2, ?3)",
+            params![playlist_id, track_id, position],
+        )?;
+        added += 1;
+    }
+    tx.commit()?;
+    Ok(added)
+}
+
 pub fn delete_playlist(conn: &Connection, playlist_id: i64) -> AppResult<()> {
     let tx = conn.unchecked_transaction()?;
     tx.execute("DELETE FROM playlist_items WHERE playlist_id = ?1", [playlist_id])?;
@@ -699,18 +829,104 @@ mod tests {
         }
     }
 
+    /// Live Media rows never surface in the aggregated library, while the Live
+    /// view sees every local file under its folder whatever kind it carries —
+    /// and the v7 migration moves files already under the folder out of the
+    /// library rather than leaving them mixed in.
+    #[test]
+    fn live_media_rows_stay_out_of_the_library_and_migration_retags_them() {
+        let conn = mem_db();
+        let dir = "/Users/me/Live";
+        let mut live = new_track("Aired", "A", &format!("{dir}/a.mp3"));
+        live.source_kind = "live".into();
+        insert_track(&conn, &live, 0).unwrap();
+        insert_track(&conn, &new_track("Everyday", "A", "/Users/me/Music/b.mp3"), 0).unwrap();
+        // Imported as a plain library file *before* Live Media existed.
+        insert_track(&conn, &new_track("Legacy", "A", &format!("{dir}/c.mp3")), 0).unwrap();
+
+        let names = |ts: Vec<Track>| ts.into_iter().map(|t| t.title.unwrap()).collect::<Vec<_>>();
+        assert_eq!(
+            names(list_tracks(&conn, None, None, None, 100, 0).unwrap()),
+            vec!["Everyday", "Legacy"],
+            "the library shows everything except 'live' rows"
+        );
+        assert_eq!(names(list_tracks_under(&conn, dir).unwrap()), vec!["Aired", "Legacy"]);
+
+        // Re-run the v7 step with a Live folder configured: Legacy leaves the library.
+        set_setting(&conn, "live.media_dir", dir).unwrap();
+        conn.pragma_update(None, "user_version", 6).unwrap();
+        migrate(&conn).unwrap();
+        assert_eq!(names(list_tracks(&conn, None, None, None, 100, 0).unwrap()), vec!["Everyday"]);
+        assert_eq!(names(list_tracks_under(&conn, dir).unwrap()), vec!["Aired", "Legacy"]);
+    }
+
+    /// The Live Media list is exactly the OWNED files under the chosen folder:
+    /// a sibling folder sharing the prefix (`Music2` vs `Music`) must not leak
+    /// in, LIKE wildcards in the folder name must not widen the match, and a
+    /// stream living "under" the path can never appear — streams can't air.
+    #[test]
+    fn list_tracks_under_is_an_exact_folder_prefix_of_owned_files() {
+        let conn = mem_db();
+        let dir = "/Users/me/My_Music 100%";
+        insert_track(&conn, &new_track("In", "A", &format!("{dir}/a.mp3")), 0).unwrap();
+        insert_track(&conn, &new_track("Deep", "A", &format!("{dir}/sub/b.mp3")), 0).unwrap();
+        // Sibling folder that merely starts with the same text.
+        insert_track(&conn, &new_track("Sibling", "A", &format!("{dir}2/c.mp3")), 0).unwrap();
+        // `_` and `%` would match anything under LIKE; they must be literal here.
+        insert_track(&conn, &new_track("Wild", "A", "/Users/me/MyXMusic 100Y/d.mp3"), 0).unwrap();
+        let mut stream = new_track("Stream", "A", &format!("{dir}/e"));
+        stream.capability = Capability::StreamPlayable;
+        insert_track(&conn, &stream, 0).unwrap();
+
+        let got: Vec<String> = list_tracks_under(&conn, dir)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.title.unwrap())
+            .collect();
+        assert_eq!(got, vec!["Deep", "In"], "sorted by title; nothing else leaks in");
+
+        // A trailing slash on the chosen folder is normalised away.
+        assert_eq!(list_tracks_under(&conn, &format!("{dir}/")).unwrap().len(), 2);
+    }
+
     #[test]
     fn migration_creates_schema_and_fts() {
         let conn = mem_db();
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 5);
+        assert_eq!(version, 7);
         // FTS5 table exists and is queryable
         let count: i64 = conn
             .query_row("SELECT count(*) FROM tracks_fts", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn junction_tables_are_indexed() {
+        // Reference-by-id junction tables must be indexed so playlist loads and
+        // track-delete cascades stay fast at scale (millions of rows).
+        let conn = mem_db();
+        let names: Vec<String> = {
+            let mut stmt = conn
+                .prepare("SELECT name FROM sqlite_master WHERE type = 'index'")
+                .unwrap();
+            stmt.query_map([], |r| r.get::<_, String>(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        };
+        for want in [
+            "idx_playlist_items_playlist",
+            "idx_playlist_items_track",
+            "idx_crate_items_crate",
+            "idx_crate_items_track",
+            "idx_cues_track",
+            "idx_history_track",
+        ] {
+            assert!(names.iter().any(|n| n == want), "missing index: {want}");
+        }
     }
 
     #[test]
@@ -858,6 +1074,34 @@ mod tests {
     }
 
     #[test]
+    fn add_tracks_batch_preserves_order_and_skips_duplicates() {
+        let conn = mem_db();
+        for (i, name) in ["A", "B", "C"].iter().enumerate() {
+            insert_track(&conn, &new_track(name, "Artist", &format!("/m/{name}.flac")), i as i64)
+                .unwrap();
+        }
+        let ids: Vec<i64> = list_tracks(&conn, None, Some("added_at:asc"), None, 10, 0)
+            .unwrap()
+            .iter()
+            .map(|t| t.id)
+            .collect();
+        let pid = create_playlist(&conn, "Batch").unwrap();
+
+        // First add C then A, in that order.
+        let added = add_tracks_to_playlist(&conn, pid, &[ids[2], ids[0]]).unwrap();
+        assert_eq!(added, 2);
+
+        // Re-add A (already present, in-batch dup of B) plus B twice → only B lands.
+        let added = add_tracks_to_playlist(&conn, pid, &[ids[0], ids[1], ids[1]]).unwrap();
+        assert_eq!(added, 1);
+
+        let items = playlist_tracks(&conn, pid).unwrap();
+        let order: Vec<&str> = items.iter().map(|t| t.title.as_deref().unwrap()).collect();
+        assert_eq!(order, vec!["C", "A", "B"], "append order preserved, no dupes");
+        assert_eq!(list_playlists(&conn).unwrap()[0].track_count, 3);
+    }
+
+    #[test]
     fn metadata_edit_updates_row_and_fts() {
         let conn = mem_db();
         insert_track(
@@ -875,6 +1119,7 @@ mod tests {
             year: Some(1984),
             genre: Some("  ".into()), // whitespace → NULL
             media_type: None,
+            uri: None,
         };
         let updated = update_track_metadata(&conn, id, &edit).unwrap();
         assert_eq!(updated.title.as_deref(), Some("Smooth Operator"));

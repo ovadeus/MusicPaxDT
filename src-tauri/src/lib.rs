@@ -34,6 +34,10 @@ pub fn run() {
 
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        // In-app updates: the frontend checks, downloads and stages a newer
+        // release in the background, then offers one-click "Relaunch to update".
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build());
     if !cfg!(dev) {
@@ -79,6 +83,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::import_folder,
+            commands::live_media_dir,
+            commands::set_live_media_dir,
+            commands::rescan_live_media,
+            commands::list_live_media,
             commands::list_tracks,
             commands::update_track_metadata,
             commands::set_track_favorite,
@@ -111,7 +119,13 @@ pub fn run() {
             commands::relink_track,
             commands::start_screen_audio,
             commands::stop_screen_audio,
-            commands::set_mini_window,
+            commands::set_window_size,
+            commands::get_mic_config,
+            commands::set_mic,
+            commands::mic_start,
+            commands::mic_stop,
+            commands::mic_hold,
+            commands::mic_status,
             commands::engine_status,
             commands::start_recording,
             commands::stop_recording,
@@ -120,10 +134,12 @@ pub fn run() {
             commands::recording_format_label,
             commands::streams::integration_status,
             commands::streams::set_youtube_api_key,
+            commands::streams::verify_youtube_api_key,
             commands::streams::set_spotify_credentials,
             commands::streams::import_stream_url,
             commands::streams::import_direct_stream,
             commands::streams::mirror_playlist,
+            commands::streams::ai_build_playlist,
             commands::streams::repair_streams,
             commands::streams::reresolve_stream,
             commands::streams::radio_top,
@@ -143,6 +159,7 @@ pub fn run() {
             commands::streams::move_playlist_to_folder,
             commands::streams::reorder_playlist_folders,
             commands::streams::add_to_playlist,
+            commands::streams::add_tracks_to_playlist,
             commands::streams::delete_playlist,
             commands::streams::rename_playlist,
             commands::streams::import_mpx_playlist,
@@ -152,6 +169,7 @@ pub fn run() {
             commands::enrich::set_acoustid_key,
             commands::enrich::set_anthropic_key,
             commands::enrich::set_openai_key,
+            commands::enrich::set_gemini_key,
             commands::enrich::propose_enrichment,
             commands::enrich::lookup_track_tags,
             commands::enrich::clean_track_metadata,

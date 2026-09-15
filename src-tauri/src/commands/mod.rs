@@ -84,6 +84,91 @@ pub async fn list_tracks(
     .map_err(|e| AppError::Other(format!("query task failed: {e}")))?
 }
 
+/// Settings key for the Live Media folder.
+const LIVE_MEDIA_DIR_KEY: &str = "live.media_dir";
+/// source_kind stamped on Live Media rows. They are OWNED, playable local
+/// files, but the aggregated library views exclude this kind: Live mode is
+/// its own world, and its files never mix into the everyday library.
+const LIVE_SOURCE_KIND: &str = "live";
+
+/// The scanner canonicalizes every file path it stores, so the Live folder
+/// must be held and queried in the same form — a symlinked folder (say
+/// ~/Music on an external drive) or a /var-style path would otherwise list
+/// nothing. Falls back to the path as given if it can't be resolved.
+fn canonical_dir(path: &str) -> String {
+    std::fs::canonicalize(path.trim())
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path.trim().to_string())
+}
+
+/// The Live Media folder, if one has been chosen. Go Live airs only local
+/// files, and this folder is the on-air list: aggregated sources (YouTube,
+/// radio) can't be re-broadcast under their terms, so the live view is
+/// deliberately just what's under here.
+#[tauri::command]
+pub fn live_media_dir(state: State<'_, AppState>) -> AppResult<Option<String>> {
+    let conn = lock_unpoisoned(&state.db);
+    Ok(db::get_setting(&conn, LIVE_MEDIA_DIR_KEY)?
+        .filter(|d| !d.trim().is_empty())
+        .map(|d| canonical_dir(&d)))
+}
+
+/// Choose the Live Media folder and scan it. The files join the main library
+/// as ordinary OWNED tracks (they are the user's own files); the Live Media
+/// list is a filtered view of them, not a second copy.
+#[tauri::command]
+pub async fn set_live_media_dir(
+    path: String,
+    state: State<'_, AppState>,
+) -> AppResult<ImportResult> {
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = lock_unpoisoned(&db);
+        let dir = canonical_dir(&path);
+        db::set_setting(&conn, LIVE_MEDIA_DIR_KEY, &dir)?;
+        scan::import_folder_as(&conn, &PathBuf::from(&dir), Some(LIVE_SOURCE_KIND))
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("live media scan failed: {e}")))?
+}
+
+/// Re-scan the Live Media folder so files added since still show up. Dedupes
+/// by uri, so this is safe to run every time Go Live opens.
+#[tauri::command]
+pub async fn rescan_live_media(state: State<'_, AppState>) -> AppResult<ImportResult> {
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = lock_unpoisoned(&db);
+        match db::get_setting(&conn, LIVE_MEDIA_DIR_KEY)? {
+            Some(dir) if !dir.trim().is_empty() => scan::import_folder_as(
+                &conn,
+                &PathBuf::from(canonical_dir(&dir)),
+                Some(LIVE_SOURCE_KIND),
+            ),
+            _ => Ok(ImportResult { imported: 0, skipped: 0, relinked: 0, errors: Vec::new() }),
+        }
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("live media scan failed: {e}")))?
+}
+
+/// The Live Media list: every OWNED track under the chosen folder.
+#[tauri::command]
+pub async fn list_live_media(state: State<'_, AppState>) -> AppResult<Vec<Track>> {
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = lock_unpoisoned(&db);
+        match db::get_setting(&conn, LIVE_MEDIA_DIR_KEY)? {
+            Some(dir) if !dir.trim().is_empty() => {
+                db::list_tracks_under(&conn, &canonical_dir(&dir))
+            }
+            _ => Ok(Vec::new()),
+        }
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("live media query failed: {e}")))?
+}
+
 fn artist_bio_key(artist: &str) -> String {
     format!("artistbio.{}", artist.trim().to_lowercase())
 }
@@ -219,7 +304,10 @@ pub async fn update_track_metadata(
         };
         let track = db::update_track_metadata(&conn, track_id, &edit)?;
         // Persist to the file itself for owned local audio.
-        if track.capability == Capability::Owned && track.source_kind == "local" {
+        // Live Media rows are local files too: edits reach the file the same way.
+        if track.capability == Capability::Owned
+            && matches!(track.source_kind.as_str(), "local" | "live")
+        {
             scan::write_tags(&track);
         }
         Ok(track)
@@ -573,30 +661,158 @@ pub fn stop_screen_audio(state: State<'_, AppState>) {
     *lock_unpoisoned(&state.screen_audio) = None;
 }
 
-/// Toggle the compact "mini player" window: a small, fixed-size, floating,
-/// always-on-top card vs. the full app. In mini the window is locked
-/// (non-resizable) — only the in-app expand button restores the full size.
+// ----- Talk-over mic ----------------------------------------------------------
+
+/// Persisted mic settings (settings table, `mic.*`).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MicConfig {
+    /// Input device name; None = the system default input.
+    pub device: Option<String>,
+    /// "open" or "ptt" (push-to-talk).
+    pub mode: String,
+    pub gain_db: f32,
+    /// How far the music drops while talking (negative dB).
+    pub duck_db: f32,
+    /// RMS level (dBFS) above which the mic counts as "talking" (open-mic mode).
+    pub threshold_db: f32,
+    /// Also send the mic to the speakers. Off by default: with an external
+    /// desk the DJ already hears themselves, and a bare mic in the room feeds back.
+    pub monitor: bool,
+}
+
+fn load_mic_config(conn: &rusqlite::Connection) -> AppResult<MicConfig> {
+    let get = |k: &str| db::get_setting(conn, k);
+    let num = |k: &str, d: f32| -> AppResult<f32> {
+        Ok(get(k)?.and_then(|v| v.parse().ok()).unwrap_or(d))
+    };
+    Ok(MicConfig {
+        device: get("mic.device")?.filter(|d| !d.trim().is_empty()),
+        mode: get("mic.mode")?.unwrap_or_else(|| "ptt".into()),
+        gain_db: num("mic.gain_db", 0.0)?,
+        duck_db: num("mic.duck_db", -12.0)?,
+        threshold_db: num("mic.threshold_db", -42.0)?,
+        monitor: get("mic.monitor")?.as_deref() == Some("1"),
+    })
+}
+
+fn apply_mic_config(engine: &crate::audio::engine::EngineHandle, c: &MicConfig) {
+    engine.set_mic_params(
+        crate::audio::mic::mode_from_name(&c.mode),
+        c.gain_db,
+        c.duck_db,
+        c.threshold_db,
+        c.monitor,
+    );
+}
+
 #[tauri::command]
-pub fn set_mini_window(mini: bool, app: AppHandle) -> AppResult<()> {
+pub fn get_mic_config(state: State<'_, AppState>) -> AppResult<MicConfig> {
+    let conn = lock_unpoisoned(&state.db);
+    load_mic_config(&conn)
+}
+
+/// Save mic settings and apply them to the engine immediately.
+#[tauri::command]
+pub fn set_mic(config: MicConfig, state: State<'_, AppState>) -> AppResult<MicConfig> {
+    {
+        let conn = lock_unpoisoned(&state.db);
+        db::set_setting(&conn, "mic.device", config.device.as_deref().unwrap_or(""))?;
+        db::set_setting(&conn, "mic.mode", &config.mode)?;
+        db::set_setting(&conn, "mic.gain_db", &config.gain_db.to_string())?;
+        db::set_setting(&conn, "mic.duck_db", &config.duck_db.to_string())?;
+        db::set_setting(&conn, "mic.threshold_db", &config.threshold_db.to_string())?;
+        db::set_setting(&conn, "mic.monitor", if config.monitor { "1" } else { "0" })?;
+    }
+    apply_mic_config(&state.engine, &config);
+    Ok(config)
+}
+
+/// Start the talk-over mic on `input` (None = default input). Applies the
+/// saved settings first so gain, ducking and mode are right from the first
+/// word, whether or not the panel that edits them has been opened.
+#[tauri::command]
+pub async fn mic_start(
+    input: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<crate::audio::mic::MicStatus> {
+    let engine = state.engine.clone();
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let config = {
+            let conn = lock_unpoisoned(&db);
+            let mut c = load_mic_config(&conn)?;
+            if input.is_some() {
+                c.device = input.clone().filter(|d| !d.trim().is_empty());
+                db::set_setting(&conn, "mic.device", c.device.as_deref().unwrap_or(""))?;
+            }
+            c
+        };
+        apply_mic_config(&engine, &config);
+        engine.mic_start(config.device.clone())?;
+        Ok(engine.mic_status())
+    })
+    .await
+    .map_err(|e| AppError::Audio(format!("mic task failed: {e}")))?
+}
+
+#[tauri::command]
+pub async fn mic_stop(state: State<'_, AppState>) -> AppResult<crate::audio::mic::MicStatus> {
+    let engine = state.engine.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        engine.mic_stop()?;
+        Ok(engine.mic_status())
+    })
+    .await
+    .map_err(|e| AppError::Audio(format!("mic task failed: {e}")))?
+}
+
+/// Push-to-talk hold / release.
+#[tauri::command]
+pub fn mic_hold(open: bool, state: State<'_, AppState>) {
+    state.engine.mic_hold(open);
+}
+
+#[tauri::command]
+pub fn mic_status(state: State<'_, AppState>) -> crate::audio::mic::MicStatus {
+    state.engine.mic_status()
+}
+
+/// Geometry for one of the three player sizes: `(width, height, min width,
+/// min height, floating)`. A floating size is its own minimum so the window
+/// can shrink below the full-app floor; only "full" is resizable and normally
+/// stacked. Anything unrecognised falls back to the full window.
+fn window_geometry(size: &str) -> (f64, f64, f64, f64, bool) {
+    match size {
+        "micro" => (360.0, 190.0, 360.0, 190.0, true),
+        "mini" => (360.0, 600.0, 360.0, 600.0, true),
+        _ => (1280.0, 800.0, 1080.0, 720.0, false),
+    }
+}
+
+/// Size the main window for one of the three player sizes: the full app, the
+/// floating "mini" card, or the super-compact "micro" bar (title + transport +
+/// sliders). Mini and micro are fixed-size and always-on-top; only the in-app
+/// grow button steps back up.
+#[tauri::command]
+pub fn set_window_size(size: String, app: AppHandle) -> AppResult<()> {
     use tauri::{LogicalSize, Size};
     let win = app
         .get_webview_window("main")
         .ok_or_else(|| AppError::Other("main window not found".into()))?;
     let map = |r: Result<(), tauri::Error>| r.map_err(|e| AppError::Other(e.to_string()));
+    let (w, h, min_w, min_h, floating) = window_geometry(&size);
 
-    if mini {
-        // Lower the floor, shrink to the mini size, then lock it.
-        map(win.set_min_size(Some(Size::Logical(LogicalSize::new(360.0, 600.0)))))?;
-        map(win.set_size(Size::Logical(LogicalSize::new(360.0, 600.0))))?;
+    // Unlock first: a non-resizable window ignores programmatic resizes on
+    // macOS, so mini → micro would otherwise stay stuck at the mini size.
+    // Likewise lower the minimum before shrinking, or the new size is clamped.
+    map(win.set_resizable(true))?;
+    map(win.set_min_size(Some(Size::Logical(LogicalSize::new(min_w, min_h)))))?;
+    map(win.set_size(Size::Logical(LogicalSize::new(w, h))))?;
+    if floating {
         map(win.set_resizable(false))?;
-        let _ = win.set_always_on_top(true);
-    } else {
-        // Re-enable resizing before restoring the full size + floor.
-        map(win.set_resizable(true))?;
-        map(win.set_min_size(Some(Size::Logical(LogicalSize::new(1080.0, 720.0)))))?;
-        map(win.set_size(Size::Logical(LogicalSize::new(1280.0, 800.0))))?;
-        let _ = win.set_always_on_top(false);
     }
+    let _ = win.set_always_on_top(floating);
     Ok(())
 }
 
@@ -722,4 +938,33 @@ pub async fn stop_recording(state: State<'_, AppState>) -> AppResult<Track> {
     })
     .await
     .map_err(|e| AppError::Audio(format!("stop-recording task failed: {e}")))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::window_geometry;
+
+    /// Every floating size must be its own minimum, or macOS clamps the
+    /// shrink and the window stays at the size it already had.
+    #[test]
+    fn floating_player_sizes_are_their_own_minimum() {
+        for size in ["mini", "micro"] {
+            let (w, h, min_w, min_h, floating) = window_geometry(size);
+            assert!(floating, "{size} should float above other windows");
+            assert_eq!((w, h), (min_w, min_h), "{size} must be able to reach its size");
+        }
+    }
+
+    /// Micro is the smallest size, and unknown values fall back to the full
+    /// window rather than trapping the user in a locked, tiny window.
+    #[test]
+    fn micro_is_smallest_and_unknown_falls_back_to_full() {
+        let (_, micro_h, ..) = window_geometry("micro");
+        let (_, mini_h, ..) = window_geometry("mini");
+        assert!(micro_h < mini_h, "micro must be shorter than mini");
+
+        let full = window_geometry("full");
+        assert_eq!(window_geometry("nonsense"), full);
+        assert!(!full.4, "the full window stays resizable");
+    }
 }

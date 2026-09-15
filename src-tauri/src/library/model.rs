@@ -116,5 +116,8 @@ pub struct MetadataSuggestion {
 pub struct ImportResult {
     pub imported: u32,
     pub skipped: u32,
+    /// Existing rows whose file had gone missing and turned up here under a
+    /// new path — repointed rather than imported again.
+    pub relinked: u32,
     pub errors: Vec<String>,
 }

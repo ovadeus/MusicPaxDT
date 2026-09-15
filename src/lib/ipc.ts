@@ -3,6 +3,10 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { getVersion } from "@tauri-apps/api/app";
 import type {
   AudioDevice,
   EngineStatus,
@@ -29,6 +33,28 @@ import type {
 
 export function importFolder(path: string): Promise<ImportResult> {
   return invoke<ImportResult>("import_folder", { path });
+}
+
+// ----- Live Media: the Go Live on-air folder ---------------------------------
+// Only local files can broadcast (aggregated sources can't be re-streamed under
+// their terms), so the live view is exactly the OWNED tracks under this folder.
+
+export function liveMediaDir(): Promise<string | null> {
+  return invoke<string | null>("live_media_dir");
+}
+
+/// Choose the folder and scan it (files join the library as OWNED tracks).
+export function setLiveMediaDir(path: string): Promise<ImportResult> {
+  return invoke<ImportResult>("set_live_media_dir", { path });
+}
+
+/// Re-scan the chosen folder so newly added files appear. Dedupes by uri.
+export function rescanLiveMedia(): Promise<ImportResult> {
+  return invoke<ImportResult>("rescan_live_media");
+}
+
+export function listLiveMedia(): Promise<Track[]> {
+  return invoke<Track[]>("list_live_media");
 }
 
 export function listTracks(opts: {
@@ -224,9 +250,13 @@ export function musicPaxFeed(
   return invoke<FeedPage>("musicpax_feed", { page, limit, category: category ?? null });
 }
 
-/// Shrink the window into the floating, always-on-top mini player, or restore.
-export function setMiniWindow(mini: boolean): Promise<void> {
-  return invoke<void>("set_mini_window", { mini });
+/// The three player sizes: the full app, the floating mini card, and the
+/// super-compact micro bar. Mini and micro are always-on-top and fixed-size.
+export type WindowSize = "full" | "mini" | "micro";
+
+/// Resize the window to one of the player sizes.
+export function setWindowSize(size: WindowSize): Promise<void> {
+  return invoke<void>("set_window_size", { size });
 }
 
 /// Toggle the engine's visualizer audio tap (emits `audio-spectrum` while on).
@@ -301,6 +331,10 @@ export function setAnthropicKey(key: string): Promise<void> {
 
 export function setOpenaiKey(key: string): Promise<void> {
   return invoke<void>("set_openai_key", { key });
+}
+
+export function setGeminiKey(key: string): Promise<void> {
+  return invoke<void>("set_gemini_key", { key });
 }
 
 export function proposeEnrichment(
@@ -412,6 +446,13 @@ export function mirrorPlaylist(input: string): Promise<MirrorReport> {
   return invoke<MirrorReport>("mirror_playlist", { input });
 }
 
+/// Build a playlist from a text prompt: the configured AI provider drafts an
+/// Artist - Title list (1–100 tracks), then it is mirrored to official YouTube
+/// embeds exactly like `mirrorPlaylist` — same `mirror-progress` events.
+export function aiBuildPlaylist(prompt: string, count: number): Promise<MirrorReport> {
+  return invoke<MirrorReport>("ai_build_playlist", { prompt, count });
+}
+
 /// Import a direct audio/video URL (e.g. an Archive.org file) as a
 /// STREAM_PLAYABLE library track (source_kind "stream").
 export function importDirectStream(url: string): Promise<Track> {
@@ -503,6 +544,15 @@ export function playlistTracks(playlistId: number): Promise<Track[]> {
 
 export function addToPlaylist(playlistId: number, trackId: number): Promise<void> {
   return invoke<void>("add_to_playlist", { playlistId, trackId });
+}
+
+/// Append many tracks to a playlist in one call, skipping any already present.
+/// Resolves to the number newly added.
+export function addTracksToPlaylist(
+  playlistId: number,
+  trackIds: number[],
+): Promise<number> {
+  return invoke<number>("add_tracks_to_playlist", { playlistId, trackIds });
 }
 
 export function deletePlaylist(playlistId: number): Promise<void> {
@@ -613,6 +663,71 @@ export function setYoutubeApiKey(key: string): Promise<void> {
   return invoke<void>("set_youtube_api_key", { key });
 }
 
+/// Open a URL in the user's default browser.
+///
+/// `<a target="_blank">` silently does nothing inside a Tauri webview — there
+/// is no browser chrome to open a tab in — so every outbound link has to go
+/// through the opener plugin. `opener:default` covers http/https.
+export function openExternal(url: string): Promise<void> {
+  return openUrl(url);
+}
+
+// ----- In-app updates ----------------------------------------------------------
+
+export interface StagedUpdate {
+  version: string;
+  notes: string | null;
+}
+
+export interface AvailableUpdate extends StagedUpdate {
+  /// Download, verify and stage it. The running app is untouched until
+  /// relaunchApp(), which is what makes "Relaunch to update" instant.
+  install: (onProgress?: (fraction: number) => void) => Promise<void>;
+}
+
+/// Look for a newer release. Resolves null when this build is current. The
+/// two phases are separate on purpose: a failed *check* (offline, no manifest
+/// yet) is routine and worth no more than a retry later, but a failed
+/// *install* won't fix itself and must be shown — swallowing it left an
+/// update installed on disk with no card ever appearing.
+export async function findUpdate(): Promise<AvailableUpdate | null> {
+  const update = await checkForUpdate();
+  if (!update) return null;
+  return {
+    version: update.version,
+    notes: update.body ?? null,
+    install: async (onProgress) => {
+      let total = 0;
+      let received = 0;
+      await update.downloadAndInstall((ev) => {
+        if (ev.event === "Started") {
+          total = ev.data.contentLength ?? 0;
+        } else if (ev.event === "Progress") {
+          received += ev.data.chunkLength;
+          if (total > 0) onProgress?.(received / total);
+        }
+      });
+    },
+  };
+}
+
+/// Quit and start the (already staged) new version.
+export function relaunchApp(): Promise<void> {
+  return relaunch();
+}
+
+/// The running app's version, from the bundle (not the build-time manifest).
+export function appVersion(): Promise<string> {
+  return getVersion();
+}
+
+/// Check a YouTube Data API key (1 quota unit) before saving it. Resolves with
+/// a short success note; rejects with a plain-language reason naming the step
+/// to go back to.
+export function verifyYoutubeApiKey(key: string): Promise<string> {
+  return invoke<string>("verify_youtube_api_key", { key });
+}
+
 export function setSpotifyCredentials(
   clientId: string,
   clientSecret: string,
@@ -672,6 +787,62 @@ export function goLiveStop(): Promise<BroadcastStatus> {
 
 export function goLiveStatus(): Promise<BroadcastStatus> {
   return invoke<BroadcastStatus>("go_live_status");
+}
+
+// ----- Talk-over mic -----------------------------------------------------------
+
+export type MicMode = "open" | "ptt";
+
+export interface MicConfig {
+  /// Input device name; null = the system default input.
+  device: string | null;
+  mode: MicMode;
+  gainDb: number;
+  /// How far the music drops while talking (negative dB).
+  duckDb: number;
+  /// RMS dBFS above which an open mic counts as "talking".
+  thresholdDb: number;
+  /// Also hear the mic in the speakers (off with an external desk).
+  monitor: boolean;
+}
+
+export interface MicStatus {
+  on: boolean;
+  mode: MicMode;
+  /// Open mic, or push-to-talk currently held.
+  open: boolean;
+  /// Ducking engaged: a voice is present (or push-to-talk is held).
+  talking: boolean;
+  /// Post-gain peak, linear 0..1.
+  level: number;
+  inputDevice: string | null;
+  inputRate: number | null;
+}
+
+export function getMicConfig(): Promise<MicConfig> {
+  return invoke<MicConfig>("get_mic_config");
+}
+
+/// Save and apply mic settings (sliders are live — no restart).
+export function setMic(config: MicConfig): Promise<MicConfig> {
+  return invoke<MicConfig>("set_mic", { config });
+}
+
+export function micStart(input: string | null): Promise<MicStatus> {
+  return invoke<MicStatus>("mic_start", { input });
+}
+
+export function micStop(): Promise<MicStatus> {
+  return invoke<MicStatus>("mic_stop");
+}
+
+/// Push-to-talk hold / release.
+export function micHold(open: boolean): Promise<void> {
+  return invoke<void>("mic_hold", { open });
+}
+
+export function micStatus(): Promise<MicStatus> {
+  return invoke<MicStatus>("mic_status");
 }
 
 export function onBroadcastState(

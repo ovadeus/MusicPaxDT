@@ -412,13 +412,16 @@ fn channel_authority(channel: &str, artist: &str) -> f32 {
     if ch.is_empty() {
         return 0.0;
     }
-    // "Artist - Topic": YouTube's auto-generated official-audio channel.
+    let names_artist = channel_names_artist(channel, artist);
+    // "<Artist> - Topic": YouTube's auto-generated official-audio channel — but
+    // only authoritative when the Topic channel actually belongs to THIS artist.
+    // "Glee Cast - Topic", "Sing King Karaoke - Topic", "Various Artists -
+    // Topic", etc. are a different artist and must NOT pass as official.
     // Tolerate the ASCII "-" and unicode "–" dash variants.
     if ch.ends_with("- topic") || ch.ends_with("– topic") {
-        return 1.0;
+        return if names_artist { 1.0 } else { 0.15 };
     }
 
-    let names_artist = channel_names_artist(channel, artist);
     let branded = ch.contains("official") || ch.contains("vevo");
     match (names_artist, branded) {
         (true, true) => 0.9,   // "Adele" + VEVO/Official, e.g. "AdeleVEVO"
@@ -475,6 +478,49 @@ pub fn match_score(
     score
 }
 
+/// True when the uploading channel is an official/authoritative source for
+/// `artist`: the artist's own channel, a VEVO/label channel, or the artist's
+/// "- Topic" (label-provided Art Track) channel. Random re-uploaders, karaoke
+/// channels, talent-show / cover accounts, and generic aggregators are not.
+fn is_authoritative(channel: &str, artist: &str) -> bool {
+    channel_authority(channel, artist) >= 0.6
+}
+
+/// Reject non-official renditions by title: karaoke, covers, tributes, talent-
+/// show performances, instrumentals, etc. A marker only rejects when the
+/// REQUESTED title doesn't itself contain it, so genuine songs like "Cover Me"
+/// or "Live and Let Die" aren't thrown out for the words "cover"/"live".
+fn is_nonofficial_title(cand_title: &str, wanted_title: &str) -> bool {
+    const MARKERS: &[&str] = &[
+        "karaoke", "cover", "tribute", "instrumental", "in the style of",
+        "made famous by", "as made famous by", "originally performed",
+        "american idol", "the voice", "x factor", "x-factor", "got talent",
+        "glee cast", "audition", "acapella", "a cappella", "nightcore",
+        "8d audio", "sped up", "sped-up", "slowed", "reaction", "backing track",
+        "how to play", "guitar lesson", "piano tutorial",
+    ];
+    let c = cand_title.to_lowercase();
+    let w = wanted_title.to_lowercase();
+    MARKERS.iter().any(|m| c.contains(m) && !w.contains(m))
+}
+
+/// Fraction of the requested title's tokens present in a candidate's title, so
+/// we pick the REQUESTED song rather than just any track on the right channel.
+fn title_token_overlap(wanted_title: &str, cand_title: &str) -> f32 {
+    let want = normalize(wanted_title);
+    if want.is_empty() {
+        return 0.0;
+    }
+    let got = normalize(cand_title);
+    want.iter().filter(|t| got.contains(*t)).count() as f32 / want.len() as f32
+}
+
+/// Pick the best OFFICIAL match for a track, or None. Only artist / label /
+/// VEVO / "<artist> - Topic" uploads are eligible; non-official renditions
+/// (karaoke, covers, talent-show performances, instrumentals…) are excluded,
+/// and the candidate must actually be the requested song. Returning None — the
+/// track is skipped — is deliberately preferred over surfacing an unofficial
+/// substitute (the app never presents karaoke/cover uploads as the track).
 pub fn best_match<'a>(
     artist: &str,
     title: &str,
@@ -483,6 +529,9 @@ pub fn best_match<'a>(
 ) -> Option<(&'a Candidate, f32)> {
     candidates
         .iter()
+        .filter(|c| is_authoritative(&c.channel, artist))
+        .filter(|c| !is_nonofficial_title(&c.title, title))
+        .filter(|c| title_token_overlap(title, &c.title) >= 0.5)
         .map(|c| (c, match_score(artist, title, want_duration_ms, c)))
         .max_by(|a, b| a.1.total_cmp(&b.1))
         .filter(|(_, score)| *score >= 0.5)
@@ -599,5 +648,42 @@ mod tests {
         assert_eq!(channel_authority("The Weeknd", "The Weeknd"), 0.6);
         assert_eq!(channel_authority("Official Music HD", "The Weeknd"), 0.2);
         assert_eq!(channel_authority("randomuploader", "The Weeknd"), 0.0);
+    }
+
+    #[test]
+    fn topic_channel_for_a_different_artist_is_not_authoritative() {
+        // A "- Topic" channel only counts when it's THIS artist's Topic channel.
+        assert_eq!(channel_authority("Journey - Topic", "Journey"), 1.0);
+        assert_eq!(channel_authority("Glee Cast - Topic", "Journey"), 0.15);
+    }
+
+    #[test]
+    fn rejects_karaoke_idol_covers_and_wrong_artist_topic() {
+        let dur = Some(251_000);
+        // Only unofficial renditions available → skip the track (no substitute).
+        let junk = vec![
+            cand("Journey - Don't Stop Believin' (Karaoke Version)", "Sing King Karaoke", 251),
+            cand("Don't Stop Believin' - American Idol Performance", "American Idol", 180),
+            cand("Don't Stop Believin'", "Glee Cast - Topic", 200), // Topic, wrong artist
+            cand("Don't Stop Believin' (Cover)", "Journey", 251),   // artist channel, but a cover
+        ];
+        assert!(best_match("Journey", "Don't Stop Believin'", dur, &junk).is_none());
+
+        // Add the artist's official Topic upload and it is chosen.
+        let mut all = junk;
+        all.push(cand("Don't Stop Believin'", "Journey - Topic", 251));
+        let (best, _) = best_match("Journey", "Don't Stop Believin'", dur, &all)
+            .expect("official upload should match");
+        assert_eq!(best.channel, "Journey - Topic");
+    }
+
+    #[test]
+    fn official_upload_of_the_wrong_song_is_not_matched() {
+        // Right (Topic) channel, wrong song → not accepted just because the
+        // channel is authoritative; the title must actually match.
+        let candidates = vec![cand("Separate Ways", "Journey - Topic", 245)];
+        assert!(
+            best_match("Journey", "Don't Stop Believin'", Some(251_000), &candidates).is_none()
+        );
     }
 }

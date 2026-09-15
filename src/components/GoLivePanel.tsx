@@ -1,11 +1,38 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, RadioTower, X } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  FolderOpen,
+  Mic,
+  MicOff,
+  RadioTower,
+  RefreshCw,
+} from "lucide-react";
 import * as ipc from "../lib/ipc";
-import type { BroadcastConfig, BroadcastStatus } from "../lib/ipc";
+import type { BroadcastConfig, BroadcastStatus, MicConfig, MicMode, MicStatus } from "../lib/ipc";
+import type { AudioDevice } from "../lib/types";
+
+/// Mic meter: peak → dBFS → 0..100 over a 60 dB range.
+function levelPercent(level: number): number {
+  if (level <= 0) return 0;
+  const db = 20 * Math.log10(level);
+  return Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
+}
+
+function fmtDb(db: number): string {
+  return `${db > 0 ? "+" : ""}${db} dB`;
+}
 
 interface Props {
   onClose: () => void;
   onError: (message: string) => void;
+  /// The Live Media folder — the only tracks that can go on air. Null until chosen.
+  liveDir: string | null;
+  liveCount: number;
+  /// True while a folder scan is running (disables the folder buttons).
+  busyMedia?: boolean;
+  onSelectFolder: () => void;
+  onRescan: () => void;
 }
 
 const BITRATES = [128, 192, 256, 320];
@@ -29,7 +56,20 @@ function formatElapsed(ms: number): string {
 
 /// "Go Live" — broadcast the MUSICPAX output mix to a Radio King / Icecast
 /// station. Connection details come from the user's Radio King → Live tab.
-export default function GoLivePanel({ onClose, onError }: Props) {
+///
+/// An inline accordion under the header rather than a modal: this is a form
+/// you edit *while* on air, and a click-outside-to-dismiss overlay threw the
+/// settings away mid-broadcast. Nothing here closes except the collapse
+/// button, and collapsing never stops the stream.
+export default function GoLivePanel({
+  onClose,
+  onError,
+  liveDir,
+  liveCount,
+  busyMedia,
+  onSelectFolder,
+  onRescan,
+}: Props) {
   const [config, setConfig] = useState<BroadcastConfig | null>(null);
   const [password, setPassword] = useState("");
   const [hasPassword, setHasPassword] = useState(false);
@@ -42,6 +82,71 @@ export default function GoLivePanel({ onClose, onError }: Props) {
   });
   const [busy, setBusy] = useState(false);
   const [advanced, setAdvanced] = useState(false);
+
+  // ----- talk-over mic -----------------------------------------------------
+  const [micCfg, setMicCfg] = useState<MicConfig | null>(null);
+  const [micStat, setMicStat] = useState<MicStatus | null>(null);
+  const [inputs, setInputs] = useState<AudioDevice[]>([]);
+  const [micBusy, setMicBusy] = useState(false);
+  const micOn = micStat?.on ?? false;
+  const ptt = (micCfg?.mode ?? "ptt") === "ptt";
+
+  useEffect(() => {
+    ipc.getMicConfig().then(setMicCfg).catch((e) => onError(`${e}`));
+    ipc.micStatus().then(setMicStat).catch(() => {});
+    ipc.getAudioInputDevices().then(setInputs).catch(() => {});
+  }, [onError]);
+
+  // While the mic runs, poll for the meter and the "talking" state. 10 Hz is
+  // plenty for a level bar and costs nothing (a few atomics).
+  useEffect(() => {
+    if (!micOn) return;
+    const id = window.setInterval(() => {
+      ipc.micStatus().then(setMicStat).catch(() => {});
+    }, 100);
+    return () => window.clearInterval(id);
+  }, [micOn]);
+
+  // Push-to-talk on the keyboard: hold Option (⌥). A modifier can't type into
+  // a field, so it never fights with editing, and it's easy to hold.
+  useEffect(() => {
+    if (!micOn || !ptt) return;
+    const down = (e: KeyboardEvent) => {
+      if (e.key === "Alt" && !e.repeat) void ipc.micHold(true);
+    };
+    const up = (e: KeyboardEvent) => {
+      if (e.key === "Alt") void ipc.micHold(false);
+    };
+    const release = () => void ipc.micHold(false);
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    window.addEventListener("blur", release);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+      window.removeEventListener("blur", release);
+      release();
+    };
+  }, [micOn, ptt]);
+
+  const updateMic = (patch: Partial<MicConfig>) => {
+    if (!micCfg) return;
+    const next = { ...micCfg, ...patch };
+    setMicCfg(next);
+    ipc.setMic(next).catch((e) => onError(`${e}`));
+  };
+
+  const toggleMic = async () => {
+    if (!micCfg) return;
+    setMicBusy(true);
+    try {
+      setMicStat(micOn ? await ipc.micStop() : await ipc.micStart(micCfg.device));
+    } catch (e) {
+      onError(`${e}`);
+    } finally {
+      setMicBusy(false);
+    }
+  };
 
   useEffect(() => {
     ipc
@@ -65,7 +170,10 @@ export default function GoLivePanel({ onClose, onError }: Props) {
     };
   }, [onError]);
 
-  const live = status.state !== "idle";
+  // Fields lock only while a connection is actually being kept up. An error
+  // is exactly when they need editing — locking them there left the user
+  // staring at "check your source password" with no way to check it.
+  const live = status.state !== "idle" && status.state !== "error";
   const set = <K extends keyof BroadcastConfig>(key: K, value: BroadcastConfig[K]) =>
     setConfig((c) => (c ? { ...c, [key]: value } : c));
 
@@ -117,18 +225,12 @@ export default function GoLivePanel({ onClose, onError }: Props) {
   };
 
   return (
-    <div className="settings-overlay" onClick={busy ? undefined : onClose}>
-      <div className="settings-panel golive-panel" onClick={(e) => e.stopPropagation()}>
-        <div className="settings-header">
-          <h2>
-            <RadioTower size={18} /> Go Live
-          </h2>
-          <button className="settings-close" onClick={onClose} title="Close">
-            <X size={15} />
-          </button>
-        </div>
-
-        <div className={`golive-status golive-${status.state}`}>
+    <section className={`golive-bar golive-${status.state}`}>
+      <div className="golive-bar-head">
+        <h2>
+          <RadioTower size={16} /> Go Live
+        </h2>
+        <div className="golive-status">
           <span className="golive-dot" />
           <span className="golive-state">{STATE_LABEL[status.state]}</span>
           {status.state === "live" && (
@@ -138,128 +240,76 @@ export default function GoLivePanel({ onClose, onError }: Props) {
             <span className="golive-msg">{status.message}</span>
           )}
         </div>
+        <button className="golive-collapse" onClick={onClose} title="Collapse">
+          <ChevronUp size={16} />
+        </button>
+      </div>
 
-        {config && (
-          <div className="golive-form">
-            <div className="golive-row">
-              <label className="golive-field golive-grow">
-                <span>Server host</span>
-                <input
-                  value={config.host}
-                  placeholder="e.g. live.radioking.com"
-                  disabled={live}
-                  onChange={(e) => set("host", e.target.value)}
-                />
-              </label>
-              <label className="golive-field golive-port">
-                <span>Port</span>
-                <input
-                  type="number"
-                  value={config.port}
-                  disabled={live}
-                  onChange={(e) => set("port", Number(e.target.value) || 0)}
-                />
-              </label>
-            </div>
-
-            <div className="golive-row">
-              <label className="golive-field golive-grow">
-                <span>Mount point</span>
-                <input
-                  value={config.mount}
-                  placeholder="/your-radio"
-                  disabled={live}
-                  onChange={(e) => set("mount", e.target.value)}
-                />
-              </label>
-              <label className="golive-field golive-port">
-                <span>Bitrate</span>
-                <select
-                  value={config.bitrate}
-                  disabled={live}
-                  onChange={(e) => set("bitrate", Number(e.target.value))}
-                >
-                  {BITRATES.map((b) => (
-                    <option key={b} value={b}>
-                      {b} kbps
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-
-            <div className="golive-row">
-              <label className="golive-field golive-port">
-                <span>Username</span>
-                <input
-                  value={config.username}
-                  placeholder="source"
-                  disabled={live}
-                  onChange={(e) => set("username", e.target.value)}
-                />
-              </label>
-              <label className="golive-field golive-grow">
-                <span>Source password</span>
-                <input
-                  type="password"
-                  value={password}
-                  placeholder={hasPassword ? "•••••••• (saved)" : "from Radio King → Live"}
-                  disabled={live}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-              </label>
-            </div>
-
-            <button
-              className="golive-advanced-toggle"
-              onClick={() => setAdvanced((v) => !v)}
-            >
-              <ChevronDown
-                size={14}
-                style={{ transform: advanced ? "rotate(180deg)" : "none" }}
+      {config && (
+        <div className="golive-form">
+          <div className="golive-grid">
+            <label className="golive-field golive-host">
+              <span>Server host</span>
+              <input
+                value={config.host}
+                placeholder="e.g. live.radioking.com"
+                disabled={live}
+                onChange={(e) => set("host", e.target.value)}
               />
-              Station details (optional)
-            </button>
-            {advanced && (
-              <>
-                <label className="golive-field">
-                  <span>Station name</span>
-                  <input
-                    value={config.name}
-                    disabled={live}
-                    onChange={(e) => set("name", e.target.value)}
-                  />
-                </label>
-                <div className="golive-row">
-                  <label className="golive-field golive-grow">
-                    <span>Genre</span>
-                    <input
-                      value={config.genre}
-                      disabled={live}
-                      onChange={(e) => set("genre", e.target.value)}
-                    />
-                  </label>
-                  <label className="golive-field golive-grow">
-                    <span>Website</span>
-                    <input
-                      value={config.url}
-                      disabled={live}
-                      onChange={(e) => set("url", e.target.value)}
-                    />
-                  </label>
-                </div>
-                <label className="golive-check">
-                  <input
-                    type="checkbox"
-                    checked={config.public}
-                    disabled={live}
-                    onChange={(e) => set("public", e.target.checked)}
-                  />
-                  List this stream in public Icecast directories
-                </label>
-              </>
-            )}
+            </label>
+            <label className="golive-field golive-port">
+              <span>Port</span>
+              <input
+                type="number"
+                value={config.port}
+                disabled={live}
+                onChange={(e) => set("port", Number(e.target.value) || 0)}
+              />
+            </label>
+            <label className="golive-field golive-mount">
+              <span>Mount point</span>
+              <input
+                value={config.mount}
+                placeholder="/your-radio"
+                disabled={live}
+                onChange={(e) => set("mount", e.target.value)}
+              />
+            </label>
+            <label className="golive-field golive-bitrate">
+              <span>Bitrate</span>
+              <select
+                value={config.bitrate}
+                disabled={live}
+                onChange={(e) => set("bitrate", Number(e.target.value))}
+              >
+                {BITRATES.map((b) => (
+                  <option key={b} value={b}>
+                    {b} kbps
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="golive-field golive-user">
+              <span>Username</span>
+              <input
+                value={config.username}
+                placeholder="source"
+                disabled={live}
+                onChange={(e) => set("username", e.target.value)}
+              />
+            </label>
+            <label className="golive-field golive-pass">
+              <span>Source password</span>
+              <input
+                type="password"
+                value={password}
+                placeholder={hasPassword ? "•••••••• (saved)" : "from Radio King → Live"}
+                disabled={live}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </label>
 
+            {/* Sits in the same row as the inputs, aligned to their baseline. */}
             <div className="golive-actions">
               {live ? (
                 <button className="golive-btn stop" onClick={stop} disabled={busy}>
@@ -272,17 +322,199 @@ export default function GoLivePanel({ onClose, onError }: Props) {
               )}
             </div>
           </div>
-        )}
 
-        <p className="settings-hint">
-          Find your host, port, mount and source password in your Radio King{" "}
-          <strong>Live</strong> tab. MUSICPAX airs your <strong>output mix</strong> —
-          library playback + line-in/aux — encoded to MP3. YouTube/internet-radio is
-          never re-streamed. <br />
-          <strong>RØDECaster tip:</strong> set the RØDECaster's program output as your
-          aux/line-in source so its hardware mix (mic + music) is what goes out.
-        </p>
-      </div>
-    </div>
+          {/* The on-air folder. Deliberately a hard line, not a per-track
+              judgement: what's under this folder can air, nothing else can. */}
+          <div className="golive-media">
+            <div className="golive-media-row">
+              <FolderOpen size={15} />
+              <span className="golive-media-label">Live Media folder</span>
+              {liveDir ? (
+                <span className="golive-media-path" title={liveDir}>
+                  {liveDir}
+                </span>
+              ) : (
+                <span className="golive-media-path empty">No folder selected</span>
+              )}
+              {liveDir && (
+                <span className="golive-media-count">
+                  {liveCount} {liveCount === 1 ? "track" : "tracks"}
+                </span>
+              )}
+              <button className="golive-media-btn" onClick={onSelectFolder} disabled={busyMedia}>
+                {liveDir ? "Change folder…" : "Select folder…"}
+              </button>
+              {liveDir && (
+                <button
+                  className="golive-media-btn"
+                  onClick={onRescan}
+                  disabled={busyMedia}
+                  title="Pick up files added since the last scan"
+                >
+                  <RefreshCw size={13} /> Rescan
+                </button>
+              )}
+            </div>
+            <p className="golive-media-note">
+              <strong>Live Media</strong> airs only files on this computer — tracks you own
+              or are licensed to broadcast. Playlists built from YouTube and other streaming
+              sources can't go on air: their terms don't allow re-broadcasting.
+            </p>
+          </div>
+
+          {/* Talk-over mic: mixed over the music for the broadcast, with the
+              music ducked while the DJ talks. */}
+          <div className={`golive-mic${micOn ? " on" : ""}`}>
+            <div className="golive-mic-row">
+              <button
+                className={`golive-mic-toggle${micOn ? " on" : ""}`}
+                onClick={toggleMic}
+                disabled={micBusy || !micCfg}
+                title={micOn ? "Turn the mic off" : "Turn the mic on"}
+              >
+                {micOn ? <Mic size={15} /> : <MicOff size={15} />}
+                {micOn ? "Mic on" : "Mic off"}
+              </button>
+              <select
+                className="golive-mic-select"
+                value={micCfg?.device ?? ""}
+                disabled={micOn}
+                title={micOn ? "Turn the mic off to change the input" : "Mic input"}
+                onChange={(e) => updateMic({ device: e.target.value || null })}
+              >
+                <option value="">Default input</option>
+                {inputs.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                className="golive-mic-select"
+                value={micCfg?.mode ?? "ptt"}
+                onChange={(e) => updateMic({ mode: e.target.value as MicMode })}
+              >
+                <option value="ptt">Push to talk — hold ⌥</option>
+                <option value="open">Open mic</option>
+              </select>
+              {micOn && ptt && (
+                <button
+                  className={`golive-ptt${micStat?.open ? " held" : ""}`}
+                  onMouseDown={() => void ipc.micHold(true)}
+                  onMouseUp={() => void ipc.micHold(false)}
+                  onMouseLeave={() => void ipc.micHold(false)}
+                  title="Hold to talk (or hold the ⌥ key)"
+                >
+                  Hold to talk
+                </button>
+              )}
+              <div className="golive-mic-meter" title="Mic level">
+                <div
+                  className="golive-mic-meter-fill"
+                  style={{ width: `${micOn ? levelPercent(micStat?.level ?? 0) : 0}%` }}
+                />
+              </div>
+              {micOn && micStat?.talking && <span className="golive-mic-live">ON MIC</span>}
+            </div>
+            <div className="golive-mic-row golive-mic-params">
+              <label className="golive-mic-param">
+                <span>Mic gain</span>
+                <input
+                  type="range"
+                  min={-20}
+                  max={20}
+                  step={1}
+                  value={micCfg?.gainDb ?? 0}
+                  onChange={(e) => updateMic({ gainDb: Number(e.target.value) })}
+                />
+                <em>{fmtDb(micCfg?.gainDb ?? 0)}</em>
+              </label>
+              <label className="golive-mic-param">
+                <span>Duck music</span>
+                <input
+                  type="range"
+                  min={-30}
+                  max={0}
+                  step={1}
+                  value={micCfg?.duckDb ?? -12}
+                  onChange={(e) => updateMic({ duckDb: Number(e.target.value) })}
+                />
+                <em>{fmtDb(micCfg?.duckDb ?? -12)}</em>
+              </label>
+              <label className="golive-check golive-mic-monitor">
+                <input
+                  type="checkbox"
+                  checked={micCfg?.monitor ?? false}
+                  onChange={(e) => updateMic({ monitor: e.target.checked })}
+                />
+                Hear mic in speakers
+              </label>
+            </div>
+            <p className="golive-media-note">
+              Your mic is mixed over the music for the broadcast; while you talk the
+              music ducks by the amount above and comes back when you stop. Using a
+              RØDECaster or other desk? Pick it as the input and leave “hear mic in
+              speakers” off — you're already monitoring through it.
+            </p>
+          </div>
+
+          <button
+            className="golive-advanced-toggle"
+            onClick={() => setAdvanced((v) => !v)}
+          >
+            <ChevronDown
+              size={14}
+              style={{ transform: advanced ? "rotate(180deg)" : "none" }}
+            />
+            Station details (optional)
+          </button>
+          {advanced && (
+            <div className="golive-grid golive-advanced">
+              <label className="golive-field golive-host">
+                <span>Station name</span>
+                <input
+                  value={config.name}
+                  disabled={live}
+                  onChange={(e) => set("name", e.target.value)}
+                />
+              </label>
+              <label className="golive-field golive-mount">
+                <span>Genre</span>
+                <input
+                  value={config.genre}
+                  disabled={live}
+                  onChange={(e) => set("genre", e.target.value)}
+                />
+              </label>
+              <label className="golive-field golive-mount">
+                <span>Website</span>
+                <input
+                  value={config.url}
+                  disabled={live}
+                  onChange={(e) => set("url", e.target.value)}
+                />
+              </label>
+              <label className="golive-check">
+                <input
+                  type="checkbox"
+                  checked={config.public}
+                  disabled={live}
+                  onChange={(e) => set("public", e.target.checked)}
+                />
+                List this stream in public Icecast directories
+              </label>
+            </div>
+          )}
+
+          <p className="golive-hint">
+            Find your host, port, mount and source password in your Radio King{" "}
+            <strong>Live</strong> tab. MUSICPAX airs your <strong>output mix</strong> —
+            Live Media playback + line-in/aux — encoded to MP3.{" "}
+            <strong>RØDECaster tip:</strong> set the RØDECaster's program output as your
+            aux/line-in source so its hardware mix (mic + music) is what goes out.
+          </p>
+        </div>
+      )}
+    </section>
   );
 }

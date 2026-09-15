@@ -12,6 +12,7 @@ use serde::Serialize;
 
 use crate::audio::decode::AudioFileDecoder;
 use crate::audio::input::{self, LineInSession, RecCmd};
+use crate::audio::mic::{self, MicSession, MicStatus};
 use crate::audio::riaa::DspParams;
 use crate::audio::sinks::{RecordFormat, RecordingStats};
 use crate::error::{AppError, AppResult};
@@ -104,6 +105,30 @@ pub struct Shared {
     // emits it so OWNED audio (which never reaches the webview) can be visualized.
     pub viz_active: AtomicBool,
     pub viz_cons: Mutex<Option<Consumer<f32>>>,
+    // Talk-over mic (audio/mic.rs). The relay thread pushes resampled, gained
+    // frames into `mic_prod` — the CURRENT output stream's ring, swapped in
+    // whenever a stream is built, the mirror image of `bcast_cons` — and the
+    // callback mixes them over the music, ducking it while `mic_voice` says
+    // someone is talking. The callback never touches `mic_prod`: it owns the
+    // Consumer, so it stays lock-free.
+    pub mic_on: AtomicBool,
+    /// Open mic, or push-to-talk currently held.
+    pub mic_open: AtomicBool,
+    /// `mic::MODE_OPEN` / `mic::MODE_PTT`.
+    pub mic_mode: AtomicU8,
+    /// Also send the mic to the speakers (off with an external desk — you'd
+    /// hear yourself twice).
+    pub mic_monitor: AtomicBool,
+    /// Relay: a voice is present (or push-to-talk is held) — duck the music.
+    pub mic_voice: AtomicBool,
+    pub mic_gain_bits: AtomicU32,
+    /// Linear gain applied to the music while talking (0.25 = -12 dB).
+    pub mic_duck_gain_bits: AtomicU32,
+    /// Linear RMS threshold for "talking".
+    pub mic_threshold_bits: AtomicU32,
+    /// Relay: post-gain peak of the last chunk, for the meter.
+    pub mic_level_bits: AtomicU32,
+    pub mic_prod: Mutex<Option<Producer<f32>>>,
 }
 
 impl Shared {
@@ -133,6 +158,16 @@ impl Shared {
             bcast_cons: Mutex::new(None),
             viz_active: AtomicBool::new(false),
             viz_cons: Mutex::new(None),
+            mic_on: AtomicBool::new(false),
+            mic_open: AtomicBool::new(false),
+            mic_mode: AtomicU8::new(mic::MODE_PTT),
+            mic_monitor: AtomicBool::new(false),
+            mic_voice: AtomicBool::new(false),
+            mic_gain_bits: AtomicU32::new(1.0f32.to_bits()),
+            mic_duck_gain_bits: AtomicU32::new(mic::db_to_linear(-12.0).to_bits()),
+            mic_threshold_bits: AtomicU32::new(mic::db_to_linear(-42.0).to_bits()),
+            mic_level_bits: AtomicU32::new(0),
+            mic_prod: Mutex::new(None),
         }
     }
 
@@ -211,6 +246,12 @@ enum Cmd {
         /// Replies with (resolved input device name, input sample rate).
         reply: mpsc::Sender<Result<(String, u32), String>>,
     },
+    MicStart {
+        input: Option<String>,
+        /// Replies with (resolved input device name, input sample rate).
+        reply: mpsc::Sender<Result<(String, u32), String>>,
+    },
+    MicStop,
     StartRecording {
         path: std::path::PathBuf,
         format: RecordFormat,
@@ -254,6 +295,15 @@ pub struct EngineHandle {
     tx: mpsc::Sender<Cmd>,
     current: Mutex<Option<Track>>,
     line_in: Mutex<Option<LineInInfo>>,
+    mic: Mutex<Option<MicInfo>>,
+}
+
+/// The running talk-over mic, as resolved by the host.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MicInfo {
+    pub input_device: String,
+    pub input_rate: u32,
 }
 
 impl EngineHandle {
@@ -270,6 +320,7 @@ impl EngineHandle {
             tx,
             current: Mutex::new(None),
             line_in: Mutex::new(None),
+            mic: Mutex::new(None),
         })
     }
 
@@ -400,6 +451,72 @@ impl EngineHandle {
         self.send(Cmd::Stop)
     }
 
+    // ----- talk-over mic --------------------------------------------------
+
+    pub fn mic_start(&self, input: Option<String>) -> AppResult<MicInfo> {
+        let (reply, rx) = mpsc::channel();
+        self.send(Cmd::MicStart { input, reply })?;
+        let (input_device, input_rate) = Self::wait(rx)?;
+        let info = MicInfo {
+            input_device,
+            input_rate,
+        };
+        *lock_unpoisoned(&self.mic) = Some(info.clone());
+        Ok(info)
+    }
+
+    pub fn mic_stop(&self) -> AppResult<()> {
+        *lock_unpoisoned(&self.mic) = None;
+        self.send(Cmd::MicStop)
+    }
+
+    /// Mic settings. These are plain atomics, applied immediately — no host
+    /// round trip — so sliders feel live. Switching to an open mic opens it
+    /// (if running); switching to push-to-talk closes it until the key is held.
+    pub fn set_mic_params(
+        &self,
+        mode: u8,
+        gain_db: f32,
+        duck_db: f32,
+        threshold_db: f32,
+        monitor: bool,
+    ) {
+        let s = &self.shared;
+        s.mic_mode.store(mode, Ordering::Relaxed);
+        s.mic_gain_bits
+            .store(mic::db_to_linear(gain_db.clamp(-30.0, 30.0)).to_bits(), Ordering::Relaxed);
+        s.mic_duck_gain_bits
+            .store(mic::db_to_linear(duck_db.clamp(-40.0, 0.0)).to_bits(), Ordering::Relaxed);
+        s.mic_threshold_bits
+            .store(mic::db_to_linear(threshold_db.clamp(-80.0, 0.0)).to_bits(), Ordering::Relaxed);
+        s.mic_monitor.store(monitor, Ordering::Relaxed);
+        let open = mode == mic::MODE_OPEN && s.mic_on.load(Ordering::Relaxed);
+        s.mic_open.store(open, Ordering::Relaxed);
+    }
+
+    /// Push-to-talk: hold / release. Ignored unless the mic is running in
+    /// push-to-talk mode.
+    pub fn mic_hold(&self, open: bool) {
+        let s = &self.shared;
+        if s.mic_on.load(Ordering::Relaxed) && s.mic_mode.load(Ordering::Relaxed) == mic::MODE_PTT {
+            s.mic_open.store(open, Ordering::Relaxed);
+        }
+    }
+
+    pub fn mic_status(&self) -> MicStatus {
+        let s = &self.shared;
+        let info = lock_unpoisoned(&self.mic).clone();
+        MicStatus {
+            on: s.mic_on.load(Ordering::Relaxed),
+            mode: mic::mode_name(s.mic_mode.load(Ordering::Relaxed)).to_string(),
+            open: s.mic_open.load(Ordering::Relaxed),
+            talking: s.mic_voice.load(Ordering::Relaxed),
+            level: f32::from_bits(s.mic_level_bits.load(Ordering::Relaxed)),
+            input_device: info.as_ref().map(|i| i.input_device.clone()),
+            input_rate: info.map(|i| i.input_rate),
+        }
+    }
+
     pub fn seek(&self, ms: u64) -> AppResult<()> {
         let (reply, rx) = mpsc::channel();
         self.send(Cmd::Seek { ms, reply })?;
@@ -479,6 +596,11 @@ struct AudioHost {
     current_path: Option<String>,
     session: Option<Session>,
     line_in: Option<LineInSession>,
+    mic: Option<MicSession>,
+    /// A silent output stream kept alive while the mic is on and nothing else
+    /// is playing, so the voice still reaches the speakers and the broadcast
+    /// between tracks. Dropped whenever a real session or line-in starts.
+    mic_keepalive: Option<Stream>,
 }
 
 fn host_loop(rx: mpsc::Receiver<Cmd>, shared: Arc<Shared>) {
@@ -488,6 +610,8 @@ fn host_loop(rx: mpsc::Receiver<Cmd>, shared: Arc<Shared>) {
         current_path: None,
         session: None,
         line_in: None,
+        mic: None,
+        mic_keepalive: None,
     };
     loop {
         match rx.recv_timeout(Duration::from_millis(100)) {
@@ -538,6 +662,10 @@ impl AudioHost {
                 }
             }
             Cmd::Stop => self.teardown(),
+            Cmd::MicStart { input, reply } => {
+                let _ = reply.send(self.start_mic(input.as_deref()));
+            }
+            Cmd::MicStop => self.stop_mic(),
             Cmd::Seek { ms, reply } => {
                 if self.line_in.is_some() {
                     let _ = reply.send(Err("cannot seek a live input".into()));
@@ -605,6 +733,9 @@ impl AudioHost {
                 } else {
                     // Validate the device exists even with nothing playing.
                     let _ = reply.send(self.find_device().map(|_| ()));
+                    // A mic-only keepalive stream must follow the device too.
+                    self.mic_keepalive = None;
+                    self.ensure_mic_keepalive();
                 }
             }
             Cmd::StartLineIn { input, reply } => {
@@ -695,6 +826,7 @@ impl AudioHost {
     fn start_line_in_session(&mut self, input: Option<&str>) -> Result<(String, u32), String> {
         self.line_in = None;
         self.session = None;
+        self.mic_keepalive = None; // the line-in's own output stream takes over
         let device = self.find_device()?;
         let session = input::start_line_in(self.shared.clone(), &device, input)?;
         let info = (session.input_device_name.clone(), session.input_rate);
@@ -706,6 +838,62 @@ impl AudioHost {
     fn stop_line_in(&mut self) {
         self.shared.recording.store(false, Ordering::Release);
         self.line_in = None; // Drop finalizes any in-flight recording file.
+    }
+
+    fn start_mic(&mut self, input: Option<&str>) -> Result<(String, u32), String> {
+        self.mic = None;
+        let session = mic::start(self.shared.clone(), input)?;
+        let info = (session.input_device_name.clone(), session.input_rate);
+        self.mic = Some(session);
+        self.shared.mic_on.store(true, Ordering::Relaxed);
+        // An open mic is open from the start; push-to-talk waits for the key.
+        let open = self.shared.mic_mode.load(Ordering::Relaxed) == mic::MODE_OPEN;
+        self.shared.mic_open.store(open, Ordering::Relaxed);
+        self.ensure_mic_keepalive();
+        Ok(info)
+    }
+
+    fn stop_mic(&mut self) {
+        self.shared.mic_on.store(false, Ordering::Relaxed);
+        self.shared.mic_open.store(false, Ordering::Relaxed);
+        self.shared.mic_voice.store(false, Ordering::Relaxed);
+        self.shared.mic_level_bits.store(0, Ordering::Relaxed);
+        self.mic = None;
+        self.mic_keepalive = None;
+    }
+
+    /// Keep a silent output stream alive while the mic is on and nothing else
+    /// is producing one, so the DJ's voice reaches the speakers and the
+    /// broadcast between tracks. Its playback ring has no producer — the
+    /// callback plays silence under the mic — and it is dropped the moment a
+    /// real session or line-in builds its own stream.
+    fn ensure_mic_keepalive(&mut self) {
+        let wanted = self.shared.mic_on.load(Ordering::Relaxed)
+            && self.session.is_none()
+            && self.line_in.is_none();
+        if !wanted {
+            self.mic_keepalive = None;
+            return;
+        }
+        if self.mic_keepalive.is_some() {
+            return;
+        }
+        match self.build_keepalive() {
+            Ok(stream) => self.mic_keepalive = Some(stream),
+            Err(e) => eprintln!("mic keepalive stream failed: {e}"),
+        }
+    }
+
+    fn build_keepalive(&self) -> Result<Stream, String> {
+        let device = self.find_device()?;
+        let supported = device
+            .default_output_config()
+            .map_err(|e| e.to_string())?;
+        self.shared
+            .out_rate
+            .store(supported.sample_rate().0, Ordering::Relaxed);
+        let (_no_producer, consumer) = RingBuffer::<f32>::new(64);
+        build_stream(&device, &supported, consumer, self.shared.clone())
     }
 
     /// Natural end of track: tear the session down and report stopped.
@@ -726,6 +914,8 @@ impl AudioHost {
         self.shared.frames_played.store(0, Ordering::Relaxed);
         self.shared.ended.store(false, Ordering::Relaxed);
         self.shared.zero_meters();
+        // Nothing is playing now — if the mic is on, keep its voice flowing.
+        self.ensure_mic_keepalive();
     }
 
     fn find_device(&self) -> Result<Device, String> {
@@ -746,6 +936,7 @@ impl AudioHost {
     /// playback state untouched; callers set it after.
     fn start_session(&mut self, start_ms: u64) -> Result<Option<u64>, String> {
         self.session = None; // drop old stream + decode thread first
+        self.mic_keepalive = None; // this session's stream carries the mic now
 
         let path = self
             .current_path
@@ -958,6 +1149,11 @@ fn build_stream_for<T: SizedSample + FromSample<f32>>(
     // Visualizer tap (mono): ~0.5 s of headroom; drained by the meter thread.
     let (mut viz_prod, viz_cons) = RingBuffer::<f32>::new(config.sample_rate.0 as usize / 2);
     *lock_unpoisoned(&shared.viz_cons) = Some(viz_cons);
+    // Talk-over mic ring: the callback owns the Consumer; the mic relay (an
+    // ordinary thread) takes the Producer under `mic_prod`. ~0.5 s headroom.
+    let (mic_prod, mut mic_cons) = RingBuffer::<f32>::new(config.sample_rate.0 as usize);
+    *lock_unpoisoned(&shared.mic_prod) = Some(mic_prod);
+    let mut duck = mic::DuckEnvelope::new(config.sample_rate.0);
 
     let stream = device
         .build_output_stream(
@@ -968,6 +1164,15 @@ fn build_stream_for<T: SizedSample + FromSample<f32>>(
                 let decode_done = shared.decode_done.load(Ordering::Acquire);
                 let broadcasting = shared.broadcasting.load(Ordering::Relaxed);
                 let viz_active = shared.viz_active.load(Ordering::Relaxed);
+                let mic_open = shared.mic_open.load(Ordering::Relaxed);
+                let mic_monitor = shared.mic_monitor.load(Ordering::Relaxed);
+                // Ducking target for this buffer: the relay decides whether a
+                // voice is present; the envelope smooths the transition.
+                let duck_target = if mic_open && shared.mic_voice.load(Ordering::Relaxed) {
+                    f32::from_bits(shared.mic_duck_gain_bits.load(Ordering::Relaxed))
+                } else {
+                    1.0
+                };
                 let frames = data.len() / channels;
                 let mut consumed: u64 = 0;
                 let (mut peak_l, mut peak_r) = (0.0f32, 0.0f32);
@@ -980,26 +1185,45 @@ fn build_stream_for<T: SizedSample + FromSample<f32>>(
                         r = consumer.pop().unwrap_or(0.0);
                         consumed += 1;
                     }
-                    l *= volume;
-                    r *= volume;
-                    // Tee the post-volume mix to the broadcaster (drop on overflow).
+                    // Always drain the mic ring so a closed mic never leaves
+                    // stale audio to burst out when it next opens; only use
+                    // the frames while it's open.
+                    let (mut ml, mut mr) = (0.0f32, 0.0f32);
+                    if mic_cons.slots() >= 2 {
+                        let a = mic_cons.pop().unwrap_or(0.0);
+                        let b = mic_cons.pop().unwrap_or(0.0);
+                        if mic_open {
+                            ml = a;
+                            mr = b;
+                        }
+                    }
+                    let g = volume * duck.step(duck_target);
+                    l *= g;
+                    r *= g;
+                    // What goes out: music (ducked) plus the voice. The
+                    // speakers get the voice too only when monitoring — with
+                    // an external desk the DJ already hears themselves.
+                    let bl = (l + ml).clamp(-1.0, 1.0);
+                    let br = (r + mr).clamp(-1.0, 1.0);
+                    let (sl, sr) = if mic_monitor { (bl, br) } else { (l, r) };
+                    // Tee the full mix to the broadcaster (drop on overflow).
                     if broadcasting {
-                        let _ = bcast_prod.push(l);
-                        let _ = bcast_prod.push(r);
+                        let _ = bcast_prod.push(bl);
+                        let _ = bcast_prod.push(br);
                     }
                     // Tee a mono copy to the visualizer when it's open.
                     if viz_active {
-                        let _ = viz_prod.push((l + r) * 0.5);
+                        let _ = viz_prod.push((bl + br) * 0.5);
                     }
-                    peak_l = peak_l.max(l.abs());
-                    peak_r = peak_r.max(r.abs());
-                    sum_l += l * l;
-                    sum_r += r * r;
+                    peak_l = peak_l.max(sl.abs());
+                    peak_r = peak_r.max(sr.abs());
+                    sum_l += sl * sl;
+                    sum_r += sr * sr;
                     if channels == 1 {
-                        frame[0] = T::from_sample((l + r) * 0.5);
+                        frame[0] = T::from_sample((sl + sr) * 0.5);
                     } else {
-                        frame[0] = T::from_sample(l);
-                        frame[1] = T::from_sample(r);
+                        frame[0] = T::from_sample(sl);
+                        frame[1] = T::from_sample(sr);
                         for sample in frame.iter_mut().skip(2) {
                             *sample = T::from_sample(0.0f32);
                         }

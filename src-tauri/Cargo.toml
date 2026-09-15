@@ -1,6 +1,6 @@
 [package]
 name = "stack-app"
-version = "0.1.0"
+version = "0.1.9"
 description = "STACK — local-first music & entertainment system"
 authors = ["STACK contributors"]
 edition = "2021"
@@ -38,6 +38,8 @@ tokio = { version = "1.52.3", features = ["time"] }
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 tauri-plugin-localhost = "2.3.2"
 portpicker = "0.1.1"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 [dev-dependencies]
 tokio = { version = "1.52.3", features = ["rt", "macros"] }

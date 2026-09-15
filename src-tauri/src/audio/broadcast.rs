@@ -139,8 +139,11 @@ impl Default for Broadcaster {
 }
 
 impl Broadcaster {
+    /// Connected, connecting, or reconnecting. A resting error is not live:
+    /// the worker has exited and the form is back in the user's hands.
     pub fn is_live(&self) -> bool {
-        self.status.state.load(Ordering::Relaxed) != ST_IDLE
+        let s = self.status.state.load(Ordering::Relaxed);
+        s != ST_IDLE && s != ST_ERROR
     }
 
     /// Start (or restart) broadcasting. Sets the engine tee live and spawns the
@@ -214,32 +217,66 @@ pub fn build_source_request(cfg: &IcecastConfig, sample_rate: u32) -> String {
     )
 }
 
+/// Why connecting failed — and whether retrying could ever help. Wrong
+/// credentials or a refused mount won't fix themselves: retrying them every
+/// few seconds only keeps the form locked while the user stares at the reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HandshakeError {
+    /// The server understood us and said no. Stop; the config needs a human.
+    Fatal(String),
+    /// Couldn't reach or read the server. Back off and try again.
+    Transient(String),
+}
+
+impl HandshakeError {
+    pub fn message(&self) -> &str {
+        match self {
+            HandshakeError::Fatal(m) | HandshakeError::Transient(m) => m,
+        }
+    }
+}
+
 /// Interpret the server's first response line.
-fn handshake_result(first_line: &str) -> Result<(), String> {
+fn handshake_result(first_line: &str) -> Result<(), HandshakeError> {
     if first_line.contains("200") || first_line.contains("OK") {
         Ok(())
     } else if first_line.contains("401") {
-        Err("authentication failed — check your source password".into())
+        Err(HandshakeError::Fatal(
+            "authentication failed — check your username and source password".into(),
+        ))
     } else if first_line.contains("403") {
-        Err("mount point refused (already in use, or wrong mount)".into())
+        Err(HandshakeError::Fatal(
+            "mount point refused (already in use, or wrong mount)".into(),
+        ))
     } else {
-        Err(format!(
+        Err(HandshakeError::Transient(format!(
             "server rejected the connection: {}",
             first_line.trim()
-        ))
+        )))
     }
 }
+
+/// How many times a config that has never connected gets tried before we
+/// stop and hand the form back — a wrong host or port never resolves itself.
+/// An established stream is different: it reconnects indefinitely so a
+/// network blip mid-broadcast heals on its own.
+const INITIAL_ATTEMPTS: u32 = 4;
 
 /// Bounds every blocking socket op so a dead/stalled network can never hang a
 /// broadcast (and therefore never hangs Stop/Go-Live, which join the worker).
 const NET_TIMEOUT: Duration = Duration::from_secs(10);
 
-fn connect_and_handshake(cfg: &IcecastConfig, sample_rate: u32) -> Result<TcpStream, String> {
+fn connect_and_handshake(
+    cfg: &IcecastConfig,
+    sample_rate: u32,
+) -> Result<TcpStream, HandshakeError> {
+    // Everything up to the server's reply is reachability — Transient.
+    let net = |m: String| HandshakeError::Transient(m);
     let addr = format!("{}:{}", cfg.host, cfg.port);
     // Resolve first so we can use connect_timeout (which needs a SocketAddr).
     let resolved = addr
         .to_socket_addrs()
-        .map_err(|e| format!("resolve {addr}: {e}"))?;
+        .map_err(|e| net(format!("resolve {addr}: {e}")))?;
     let mut sock = None;
     let mut last_err = format!("no addresses for {addr}");
     for sa in resolved {
@@ -251,18 +288,18 @@ fn connect_and_handshake(cfg: &IcecastConfig, sample_rate: u32) -> Result<TcpStr
             Err(e) => last_err = format!("connect {sa}: {e}"),
         }
     }
-    let mut sock = sock.ok_or(last_err)?;
+    let mut sock = sock.ok_or_else(|| net(last_err))?;
     sock.set_nodelay(true).ok();
     // Write timeout persists through the streaming loop: a stalled send fails
     // fast and is treated as connection-lost (→ reconnect) rather than blocking.
     sock.set_write_timeout(Some(NET_TIMEOUT)).ok();
     sock.write_all(build_source_request(cfg, sample_rate).as_bytes())
-        .map_err(|e| format!("handshake write failed: {e}"))?;
+        .map_err(|e| net(format!("handshake write failed: {e}")))?;
     sock.set_read_timeout(Some(NET_TIMEOUT)).ok();
     let mut buf = [0u8; 1024];
     let n = sock
         .read(&mut buf)
-        .map_err(|e| format!("no handshake response: {e}"))?;
+        .map_err(|e| net(format!("no handshake response: {e}")))?;
     let resp = String::from_utf8_lossy(&buf[..n]);
     handshake_result(resp.lines().next().unwrap_or(""))?;
     // Source protocol is write-only from here; drop the read timeout.
@@ -282,6 +319,10 @@ fn run_worker(shared: Arc<Shared>, cfg: IcecastConfig, status: Arc<Status>, app:
     let sample_rate = shared.out_rate.load(Ordering::Relaxed).max(8000);
 
     let mut backoff_steps = 1u64;
+    // Whether this config has ever connected. Until it has, failures are
+    // almost certainly the config, not the network — so they're capped.
+    let mut was_live = false;
+    let mut initial_failures = 0u32;
     let mut left: Vec<f32> = Vec::new();
     let mut right: Vec<f32> = Vec::new();
     let mut out: Vec<u8> = Vec::new();
@@ -299,7 +340,25 @@ fn run_worker(shared: Arc<Shared>, cfg: IcecastConfig, status: Arc<Status>, app:
                 if status.stop.load(Ordering::Relaxed) {
                     break;
                 }
-                status.set(ST_RECONNECTING, &e);
+                // A refusal from the server, or a config that has never once
+                // connected: stop, show why, and give the form back.
+                initial_failures += 1;
+                let give_up = match &e {
+                    HandshakeError::Fatal(_) => true,
+                    HandshakeError::Transient(_) => !was_live && initial_failures >= INITIAL_ATTEMPTS,
+                };
+                if give_up {
+                    let msg = match &e {
+                        HandshakeError::Fatal(m) => m.clone(),
+                        HandshakeError::Transient(m) => format!(
+                            "{m} — gave up after {initial_failures} tries; check the server host and port"
+                        ),
+                    };
+                    status.set(ST_ERROR, &msg);
+                    emit(&app, &status, bitrate);
+                    break 'session;
+                }
+                status.set(ST_RECONNECTING, e.message());
                 emit(&app, &status, bitrate);
                 // Backoff up to ~15s, but stay responsive to stop.
                 let ticks = backoff_steps * 10;
@@ -314,6 +373,7 @@ fn run_worker(shared: Arc<Shared>, cfg: IcecastConfig, status: Arc<Status>, app:
             }
         };
         backoff_steps = 1;
+        was_live = true;
         // Hand stop() a clone it can shut down to interrupt a stalled write.
         *lock_unpoisoned(&status.kill) = sock.try_clone().ok();
 
@@ -419,7 +479,12 @@ fn run_worker(shared: Arc<Shared>, cfg: IcecastConfig, status: Arc<Status>, app:
     }
 
     shared.broadcasting.store(false, Ordering::Relaxed);
-    status.state.store(ST_IDLE, Ordering::Relaxed);
+    // A terminal error stays on screen — the reason readable, the form
+    // editable — unless this was an explicit stop, which always means idle.
+    let stopped = status.stop.load(Ordering::Relaxed);
+    if stopped || status.state.load(Ordering::Relaxed) != ST_ERROR {
+        status.state.store(ST_IDLE, Ordering::Relaxed);
+    }
     *lock_unpoisoned(&status.kill) = None;
     emit(&app, &status, bitrate);
 }
@@ -469,17 +534,24 @@ mod tests {
         assert!(req.contains("ice-samplerate=48000"));
     }
 
+    /// A refusal (wrong password, refused mount) must be Fatal so the worker
+    /// stops and hands the form back; a server hiccup stays Transient so an
+    /// established stream keeps reconnecting through it.
     #[test]
-    fn handshake_result_maps_status_codes() {
+    fn handshake_result_maps_status_codes_and_retryability() {
         assert!(handshake_result("HTTP/1.0 200 OK").is_ok());
         assert!(handshake_result("ICY 200 OK").is_ok());
-        assert!(handshake_result("HTTP/1.0 401 Unauthorized")
-            .unwrap_err()
-            .contains("password"));
-        assert!(handshake_result("HTTP/1.0 403 Forbidden")
-            .unwrap_err()
-            .contains("mount"));
-        assert!(handshake_result("HTTP/1.0 500 Boom").is_err());
+
+        let e = handshake_result("HTTP/1.0 401 Unauthorized").unwrap_err();
+        assert!(e.message().contains("password"), "{e:?}");
+        assert!(matches!(e, HandshakeError::Fatal(_)), "bad credentials must not be retried");
+
+        let e = handshake_result("HTTP/1.0 403 Forbidden").unwrap_err();
+        assert!(e.message().contains("mount"), "{e:?}");
+        assert!(matches!(e, HandshakeError::Fatal(_)));
+
+        let e = handshake_result("HTTP/1.0 500 Boom").unwrap_err();
+        assert!(matches!(e, HandshakeError::Transient(_)), "a server hiccup is worth retrying");
     }
 
     #[test]

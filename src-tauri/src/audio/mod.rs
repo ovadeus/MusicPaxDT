@@ -3,6 +3,7 @@ pub mod decode;
 pub mod engine;
 pub mod input;
 pub mod meters;
+pub mod mic;
 pub mod riaa;
 pub mod screen_audio;
 pub mod sinks;
